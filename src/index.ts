@@ -23,7 +23,7 @@ export interface Config {
   enabled: boolean
   /** 宠物尺寸（px）。 */
   size: number
-  /** 停靠角落。 */
+  /** 默认停靠角：首次显示位置与「重置位置」目标（拖动后为自由位置）。 */
   corner: 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left'
   /** 模型：预设 id 或 .model3.json URL。 */
   model: string
