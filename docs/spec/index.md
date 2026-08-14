@@ -15,6 +15,6 @@
 
 | 文档 | 说明 |
 |------|------|
-| （尚无） | 按功能面新增 `topic.md`，并在此表登记 |
+| [`live2d-pet-v01.md`](live2d-pet-v01.md) | v0.1 行为规格：状态镜像 + 摸头/点击 + 完成庆祝 + 预设/URL 模型 + 设置与降级 |
 
 新篇可参考 Skill 内 `templates/spec-template.md`。
