@@ -39,8 +39,8 @@ export const Config: Schema<Config> = Schema.object({
   debug: Schema.boolean().default(false),
 })
 
-/** 依赖服务：webServer（路由）+ timer（完成状态保持计时）。 */
-export const inject = ['webServer', 'timer']
+/** 依赖服务：webServer（同源路由）。 */
+export const inject = ['webServer']
 
 /** 注册宠物服务及其 API + 素材路由。 */
 export function apply(ctx: Context, config: Config): void {

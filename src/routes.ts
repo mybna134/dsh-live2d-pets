@@ -105,7 +105,7 @@ function postRoute(path: string, run: (body: Record<string, unknown>) => Promise
 export function makePetRoutes(deps: { service: PetService; packageRoot: string }): WebRoute[] {
   const { service, packageRoot } = deps
   const apiRoutes: WebRoute[] = [
-    getRoute(`${PET_API_PREFIX}/state`, async () => service.state()),
+    getRoute(`${PET_API_PREFIX}/state`, async () => service.snapshot()),
     postRoute(`${PET_API_PREFIX}/set-display`, (body) => {
       const patch: { right?: number; bottom?: number; size?: number } = {}
       if (typeof body.right === 'number') patch.right = body.right

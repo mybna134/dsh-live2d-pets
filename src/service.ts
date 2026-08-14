@@ -6,6 +6,8 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
+import type {} from '@deepseek-ai/dsh-agent'
+import type {} from '@deepseek-ai/dsh-user-approval'
 import type { Config } from './index.ts'
 import {
   loadPetPersist,
@@ -30,7 +32,7 @@ export interface PetStateView {
   version: number
 }
 
-/** "完成"庆祝状态在回到空闲前的保持时长。 */
+/** "完成"庆祝状态在回到空闲前的保持时长（ms）。 */
 const DONE_HOLD_MS = 3500
 
 export class PetService {
@@ -38,30 +40,43 @@ export class PetService {
   private agent = 'idle'
   private version = 0
   private display: PetDisplay
-  private doneTimer: (() => void) | undefined
+  private doneTimerId: ReturnType<typeof setTimeout> | undefined
 
   constructor(
     private readonly ctx: Context,
     private readonly config: Config,
   ) {
     this.display = loadPetPersist()
+    // 卸载时清理"完成"保持计时器
+    ctx.effect(() => () => {
+      if (this.doneTimerId) clearTimeout(this.doneTimerId)
+    })
+
     ctx.on('agent/status', (payload) => {
       const status = payload?.status
       if (!status) return
       this.agent = String(status)
-      if (status === 'running') this.set('thinking')
-      else if (status === 'idle') this.set('idle')
+      if (status === 'running') {
+        this.set('thinking')
+      } else if (status === 'idle' && this.state !== 'done') {
+        // done 保持期内到达的 idle 不打断庆祝（由 setDone 的计时器负责回收）
+        this.set('idle')
+      }
     })
     ctx.on('agent/error', () => this.set('error'))
     ctx.on('agent/turn-stopping', () => this.setDone())
-    ctx.on('approval/request', () => this.set('waiting'))
+    // approval/request 是 waterfall 事件：必须调用 next() 放行审批链
+    ctx.on('approval/request', (_req, next) => {
+      this.set('waiting')
+      return next()
+    })
   }
 
   /** 立即切换状态；取消未完成的"完成"保持计时。 */
   private set(next: PetState): void {
-    if (this.doneTimer) {
-      this.doneTimer()
-      this.doneTimer = undefined
+    if (this.doneTimerId) {
+      clearTimeout(this.doneTimerId)
+      this.doneTimerId = undefined
     }
     if (this.state === next) return
     this.state = next
@@ -71,14 +86,14 @@ export class PetService {
   /** 进入"完成"并保持 DONE_HOLD_MS 后回空闲（客户端据此播庆祝动画）。 */
   private setDone(): void {
     this.set('done')
-    this.doneTimer = this.ctx.timeout(() => {
-      this.doneTimer = undefined
+    this.doneTimerId = setTimeout(() => {
+      this.doneTimerId = undefined
       this.set('idle')
     }, DONE_HOLD_MS)
   }
 
   /** 浏览器轮询用的状态快照。 */
-  state(): PetStateView {
+  snapshot(): PetStateView {
     return {
       state: this.state,
       agent: this.agent,

@@ -119,11 +119,15 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
   let bubble: HTMLDivElement | null = null
   let debugEl: HTMLDivElement | null = null
   let canvas: HTMLCanvasElement | null = null
-  let app: { destroy(remove?: boolean): void } | null = null
+  let app: {
+    destroy(remove?: boolean): void
+    stage: { addChild(child: unknown): unknown }
+    ticker: { addOnce(fn: () => void): unknown }
+  } | null = null
   let model: ModelLike | null = null
   let hitAreas: string[] = []
-  let pollStop: (() => void) | null = null
   let lastBubbleAt = 0
+  let lastState: PetState | null = null
   let demoState: PetState | null = null
   let pos: DisplayLike = { right: 24, bottom: 20, size: 160 }
 
@@ -151,6 +155,12 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
 
   function applyState(view: PetStateView | null): void {
     const state = demoState ?? view?.state ?? 'idle'
+    // 状态变化时播状态气泡（spec §3，走气泡冷却防刷屏）
+    if (state !== lastState) {
+      lastState = state
+      const lines = STATE_BUBBLES[state]
+      if (lines && lines.length > 0) showBubble(lines[Math.floor(Math.random() * lines.length)])
+    }
     playState(state)
     if (debugEl) {
       debugEl.textContent =
@@ -196,16 +206,17 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
   }
   function handleTap(e: PointerEvent): void {
     if (!canvas || !model) return
+    const m = model
     try {
       const rect = canvas.getBoundingClientRect()
-      const local = model.toLocal(new PIXI.Point(e.clientX - rect.left, e.clientY - rect.top))
-      const head = hitAreas.filter((n) => /head/i.test(n)).find((n) => { try { return model.hitTest(n, local.x, local.y) } catch { return false } })
-      const body = hitAreas.filter((n) => !/head/i.test(n)).find((n) => { try { return model.hitTest(n, local.x, local.y) } catch { return false } })
+      const local = m.toLocal(new PIXI.Point(e.clientX - rect.left, e.clientY - rect.top))
+      const head = hitAreas.filter((n) => /head/i.test(n)).find((n) => { try { return m.hitTest(n, local.x, local.y) } catch { return false } })
+      const body = hitAreas.filter((n) => !/head/i.test(n)).find((n) => { try { return m.hitTest(n, local.x, local.y) } catch { return false } })
       if (head) {
-        try { model.motion('TapHead') } catch { try { model.motion('TapBody') } catch { /* 无触摸动作 */ } }
+        try { m.motion('TapHead') } catch { try { m.motion('TapBody') } catch { /* 无触摸动作 */ } }
         showBubble('摸头舒服~')
       } else if (body) {
-        try { model.motion('TapBody') } catch { /* 无触摸动作 */ }
+        try { m.motion('TapBody') } catch { /* 无触摸动作 */ }
         showBubble(Math.random() < 0.5 ? '嘿嘿~' : '再点我就要生气了哦')
       }
     } catch {
@@ -265,8 +276,8 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
         if (w > 0 && h > 0) {
           const s = Math.min((size - 8) / w, (Math.round(size * 1.2) - 8) / h)
           loaded.scale.set(s)
-          loaded.anchor.set(0.5)
-          loaded.position.set(canvas.width / 2, canvas.height / 2)
+          loaded.anchor.set(0.5, 0.5)
+          loaded.position.set(canvas!.width / 2, canvas!.height / 2)
           return true
         }
         return false
