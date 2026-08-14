@@ -15,6 +15,7 @@ import { resolveModelUrl } from './models.ts'
 import {
   loadPetPersist,
   savePetPersist,
+  normalizeDisplay,
   DEFAULT_DISPLAY,
   type PetDisplay,
 } from './persist.ts'
@@ -119,13 +120,13 @@ export class PetService {
     return this.getConfig().customModels
   }
 
-  /** 更新显示配置（拖动/尺寸）并持久化。 */
+  /** 更新显示配置（拖动/尺寸）并持久化；数值在服务端按权威边界 clamp。 */
   setDisplay(patch: Partial<PetDisplay>): PetDisplay {
-    this.display = {
+    this.display = normalizeDisplay({
       right: patch.right ?? this.display.right,
       bottom: patch.bottom ?? this.display.bottom,
       size: patch.size ?? this.display.size,
-    }
+    })
     savePetPersist(this.display)
     this.version += 1
     return { ...this.display }

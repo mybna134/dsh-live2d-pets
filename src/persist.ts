@@ -25,6 +25,15 @@ function clamp(value: number, min: number, max: number): number {
   return min
 }
 
+/** 归一化显示配置到合法边界（持久化读取与 API 写入共用同一权威规则）。 */
+export function normalizeDisplay(display: PetDisplay): PetDisplay {
+  return {
+    right: clamp(display.right, 0, INSET_MAX),
+    bottom: clamp(display.bottom, 0, INSET_MAX),
+    size: clamp(display.size, DISPLAY_MIN, DISPLAY_MAX),
+  }
+}
+
 function petHomeDir(): string {
   return process.env.DSH_HOME ?? join(homedir(), '.dsh')
 }
@@ -37,11 +46,11 @@ function petFile(): string {
 export function loadPetPersist(): PetDisplay {
   try {
     const raw = JSON.parse(readFileSync(petFile(), 'utf8')) as Partial<PetDisplay>
-    return {
-      right: clamp(raw.right ?? DEFAULT_DISPLAY.right, 0, INSET_MAX),
-      bottom: clamp(raw.bottom ?? DEFAULT_DISPLAY.bottom, 0, INSET_MAX),
-      size: clamp(raw.size ?? DEFAULT_DISPLAY.size, DISPLAY_MIN, DISPLAY_MAX),
-    }
+    return normalizeDisplay({
+      right: raw.right ?? DEFAULT_DISPLAY.right,
+      bottom: raw.bottom ?? DEFAULT_DISPLAY.bottom,
+      size: raw.size ?? DEFAULT_DISPLAY.size,
+    })
   } catch {
     return { ...DEFAULT_DISPLAY }
   }
