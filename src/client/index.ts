@@ -116,14 +116,23 @@ const api = {
     }).then((res) => readJson<{ ok: boolean }>(res)),
 }
 
+/** vendor 脚本加载去重：同一 src 只注入一次、只等待同一份结果
+ * （boot 在 StrictMode/HMR 下会重复执行，避免二次注入与重复初始化）。 */
+const scriptPromises = new Map<string, Promise<void>>()
+
 function loadScript(src: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const s = document.createElement('script')
-    s.src = src
-    s.onload = () => resolve()
-    s.onerror = () => reject(new Error(`script load failed: ${src}`))
-    document.head.appendChild(s)
-  })
+  let pending = scriptPromises.get(src)
+  if (!pending) {
+    pending = new Promise((resolve, reject) => {
+      const s = document.createElement('script')
+      s.src = src
+      s.onload = () => resolve()
+      s.onerror = () => reject(new Error(`script load failed: ${src}`))
+      document.head.appendChild(s)
+    })
+    scriptPromises.set(src, pending)
+  }
+  return pending
 }
 
 /** 零尺寸锚点组件：占位 shell.overlay 席位，实际渲染在 popover 顶层容器。 */
@@ -137,6 +146,11 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
   if (!anchor) return undefined
   const cleanup: Array<() => void> = []
   const pushCleanup = (fn: () => void) => { cleanup.push(fn) }
+
+  // 卸载守卫：置位后 boot 的异步流程在每个 await 点提前退出，
+  // 避免 StrictMode 双挂载 / HMR 重挂载时残留第二份 PIXI app、轮询与脚本注入。
+  let disposed = false
+  pushCleanup(() => { disposed = true })
 
   let box: HTMLDivElement | null = null
   let bubble: HTMLDivElement | null = null
@@ -239,9 +253,8 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
     }
   }
 
-  /** 加载/重载模型层：销毁旧层 → 新建画布与 PIXI app → 绑定指针事件。 */
-  async function loadModelLayer(url: string | null): Promise<void> {
-    // 销毁旧层
+  /** 销毁当前渲染层（app/canvas/模型引用/静态头像占位）。 */
+  function teardownLayer(): void {
     if (app) { try { app.destroy(true) } catch { /* 已销毁 */ } }
     app = null
     model = null
@@ -251,6 +264,12 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
     if (canvas && canvas.parentNode) canvas.parentNode.removeChild(canvas)
     canvas = null
     removeFallback()
+  }
+
+  /** 加载/重载模型层：销毁旧层 → 新建画布与 PIXI app → 绑定指针事件。 */
+  async function loadModelLayer(url: string | null): Promise<void> {
+    teardownLayer()
+    if (disposed) return
     if (!url || !box) {
       showFallback()
       return
@@ -270,6 +289,11 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
       pushCleanup(() => { try { app?.destroy(true) } catch { /* 已销毁 */ } })
 
       const loaded = await M.from(url, { autoInteract: false }) as ModelLike
+      if (disposed) {
+        // 挂载已拆除（StrictMode/HMR）：弃用本层，不绑定事件
+        teardownLayer()
+        return
+      }
       model = loaded
       // 基础尺寸：scale=1 时捕获（Pixi Container.width 含当前 scale，必须固定基准）
       baseModelW = Number(loaded.width) || 0
@@ -289,13 +313,9 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
       canvas.addEventListener('pointerup', handlePointerUp)
       canvas.addEventListener('pointercancel', () => { down = null; dragging = false })
     } catch {
-      // 加载失败 → 静态头像（spec §7）
-      try { app?.destroy(true) } catch { /* 已销毁 */ }
-      app = null
-      model = null
-      if (canvas && canvas.parentNode) canvas.parentNode.removeChild(canvas)
-      canvas = null
-      showFallback()
+      // 加载失败 → 静态头像（spec §7）；已卸载则不再展示
+      teardownLayer()
+      if (!disposed) showFallback()
     }
   }
 
@@ -436,6 +456,7 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
     try {
       // 1. 初始状态（配置 + 显示位置）
       try { view = await api.state() } catch { /* 首帧前 API 不可用则用默认 */ }
+      if (disposed) return
       if (view) pos = { ...view.display, size: view.config.size }
 
       // 2. 顶层容器（Popover API，回退 body + max z）
@@ -455,12 +476,16 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
       box.appendChild(bubble)
 
       // 3. vendor 脚本（Host 同源）
-      for (const src of VENDOR_SCRIPTS) await loadScript(src)
+      for (const src of VENDOR_SCRIPTS) {
+        await loadScript(src)
+        if (disposed) return
+      }
 
       // 4. 初始模型（config.modelUrl：Host 解析后的 .model3.json URL，spec §6）
       const initialUrl = view?.config.modelUrl || null
       currentModelUrl = initialUrl
       await loadModelLayer(initialUrl)
+      if (disposed) return
 
       // 5. 状态轮询（visibility-aware；同时把配置变化运行时应用到宠物）
       let interval: number | undefined
@@ -468,6 +493,7 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
       const startPoll = () => {
         if (interval !== undefined) return
         interval = window.setInterval(async () => {
+          if (disposed) return
           try {
             const next = await api.state()
             view = next
