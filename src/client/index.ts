@@ -100,14 +100,20 @@ interface ModelLike {
   internalModel?: { hitAreas?: Record<string, unknown> }
 }
 
+/** JSON 响应读取:非 2xx 抛错——错误响应不得当作合法视图/结果解析。 */
+async function readJson<T>(res: Response): Promise<T> {
+  if (!res.ok) throw new Error(`http ${res.status}`)
+  return await res.json() as T
+}
+
 const api = {
-  state: (): Promise<PetStateView> => fetch(`${PET_API}/state`).then((r) => r.json()),
+  state: (): Promise<PetStateView> => fetch(`${PET_API}/state`).then((res) => readJson<PetStateView>(res)),
   setDisplay: (patch: { right?: number; bottom?: number }): Promise<{ ok: boolean }> =>
     fetch(`${PET_API}/set-display`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(patch),
-    }).then((r) => r.json()),
+    }).then((res) => readJson<{ ok: boolean }>(res)),
 }
 
 function loadScript(src: string): Promise<void> {
