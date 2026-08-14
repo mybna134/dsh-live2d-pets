@@ -156,6 +156,7 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
   let hitAreas: string[] = []
   let currentModelUrl: string | null = null
   let fallbackShown = false
+  let fallbackEl: HTMLDivElement | null = null
   // 模型基础尺寸（scale=1 时捕获一次；Pixi Container.width 含当前 scale，
   // 若每次 fit 都现读会按 1/s0 累积误差导致越放越大被画布裁剪）
   let baseModelW = 0
@@ -209,10 +210,17 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
   function showFallback(): void {
     if (!box || fallbackShown) return
     fallbackShown = true
-    const fallback = document.createElement('div')
-    fallback.style.cssText = 'pointer-events:auto;width:64px;height:64px;display:flex;align-items:center;justify-content:center;font-size:36px;background:linear-gradient(135deg,#667eea,#764ba2);border-radius:16px;color:#fff'
-    fallback.textContent = '🐾'
-    box.appendChild(fallback)
+    fallbackEl = document.createElement('div')
+    fallbackEl.style.cssText = 'pointer-events:auto;width:64px;height:64px;display:flex;align-items:center;justify-content:center;font-size:36px;background:linear-gradient(135deg,#667eea,#764ba2);border-radius:16px;color:#fff'
+    fallbackEl.textContent = '🐾'
+    box.appendChild(fallbackEl)
+  }
+
+  /** 移除静态头像占位（模型（重新）加载前调用，避免降级与画布叠加）。 */
+  function removeFallback(): void {
+    if (fallbackEl && fallbackEl.parentNode) fallbackEl.parentNode.removeChild(fallbackEl)
+    fallbackEl = null
+    fallbackShown = false
   }
 
   /** 按当前尺寸重新适配模型（画布已就绪时调用；基准尺寸为 scale=1 时捕获值）。 */
@@ -239,7 +247,7 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
     baseModelH = 0
     if (canvas && canvas.parentNode) canvas.parentNode.removeChild(canvas)
     canvas = null
-    fallbackShown = false
+    removeFallback()
     if (!url || !box) {
       showFallback()
       return
