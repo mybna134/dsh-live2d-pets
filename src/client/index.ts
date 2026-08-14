@@ -191,13 +191,16 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
 
   function applyState(next: PetStateView | null): void {
     const state = demoState ?? next?.state ?? 'idle'
-    // 状态变化时播状态气泡（spec §3，走气泡冷却防刷屏）
+    // 状态变化时播状态气泡与状态动作（spec §3，气泡走冷却防刷屏）。
+    // 动作只在状态变化时触发一次——pixi-live2d-display 的 motion() 每次
+    // 调用都会 stopAllMotions 从头播放,若随 800ms 轮询无条件重放,
+    // 待机动画永远播不满一个循环、互动动作也会在下一轮询被掐断。
     if (state !== lastState) {
       lastState = state
       const lines = STATE_BUBBLES[state]
       if (lines && lines.length > 0) showBubble(lines[Math.floor(Math.random() * lines.length)])
+      playState(state)
     }
-    playState(state)
     if (debugEl) {
       debugEl.textContent =
         `agent: ${next?.agent ?? '-'}  pet: ${state}  v${next?.version ?? '-'}\n` +
@@ -396,15 +399,36 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
       const head = hitAreas.filter((n) => /head/i.test(n)).find((n) => { try { return m.hitTest(n, local.x, local.y) } catch { return false } })
       const body = hitAreas.filter((n) => !/head/i.test(n)).find((n) => { try { return m.hitTest(n, local.x, local.y) } catch { return false } })
       if (head) {
-        try { m.motion('TapHead') } catch { try { m.motion('TapBody') } catch { /* 无触摸动作 */ } }
+        void playInteractionMotion('TapHead', 'TapBody')
         showBubble('摸头舒服~')
       } else if (body) {
-        try { m.motion('TapBody') } catch { /* 无触摸动作 */ }
+        void playInteractionMotion('TapBody')
         showBubble(Math.random() < 0.5 ? '嘿嘿~' : '再点我就要生气了哦')
       }
     } catch {
       // 坐标转换失败：忽略本次点击
     }
+  }
+
+  /**
+   * 播放互动动作（摸头/点身体）；动作播完后恢复当前状态动画（spec §4：
+   * 互动动画可打断状态动画，结束后回到状态对应动画）。个别模型动作
+   * 不完结（如循环播放）或加载失败时，由 3s 兜底定时器恢复。
+   */
+  async function playInteractionMotion(name: string, fallback?: string): Promise<void> {
+    if (!model) return
+    let finished: unknown
+    try {
+      finished = model.motion(name)
+    } catch {
+      if (fallback !== undefined) return playInteractionMotion(fallback)
+      return
+    }
+    const restore = () => { if (lastState) playState(lastState) }
+    const failSafe = window.setTimeout(restore, 3000)
+    try { await finished as Promise<unknown> } catch { /* 动作异常，直接恢复 */ }
+    window.clearTimeout(failSafe)
+    restore()
   }
 
   // ---- 主流程 ----
