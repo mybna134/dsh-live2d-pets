@@ -6,4 +6,4 @@
       name: dsh-live2d-pets
       config:
         model: https://cdn.jsdelivr.net/gh/Live2D/CubismWebSamples@develop/Samples/Resources/Hiyori/Hiyori.model3.json
-        debug: true
+        debug: false

@@ -235,8 +235,9 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
       // 2. 顶层容器（Popover API，回退 body + max z）
       box = document.createElement('div')
       const popoverSupported = typeof box.showPopover === 'function'
-      // UA 对 [popover] 默认 inset:0 + margin:auto（居中），必须显式重置（ADR-005 实证）
-      box.style.cssText = `position:fixed;inset:auto;top:auto;left:auto;right:${pos.right}px;bottom:${pos.bottom}px;margin:0;pointer-events:none${popoverSupported ? '' : ';z-index:2147483647'}`
+      // UA 对 [popover] 默认 inset:0 + margin:auto（居中）、border:solid + Canvas 背景，
+      // 必须显式重置（ADR-005 实证：居中 + 边框/背景两处坑）
+      box.style.cssText = `position:fixed;inset:auto;top:auto;left:auto;right:${pos.right}px;bottom:${pos.bottom}px;margin:0;padding:0;border:none;background:transparent;width:auto;height:auto;overflow:visible;pointer-events:none${popoverSupported ? '' : ';z-index:2147483647'}`
       if (popoverSupported) box.setAttribute('popover', 'manual')
       document.body.appendChild(box)
       if (popoverSupported) { try { box.showPopover() } catch { /* 已显示 */ } }
