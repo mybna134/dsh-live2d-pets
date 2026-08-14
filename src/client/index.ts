@@ -181,10 +181,10 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
   let view: PetStateView | null = null
   let pos: DisplayLike = { right: 24, bottom: 20, size: 160 }
 
-  function showBubble(text: string, force = false): void {
+  function showBubble(text: string): void {
     if (!bubble) return
     const now = Date.now()
-    if (!force && now - lastBubbleAt < BUBBLE_COOLDOWN_MS) return
+    if (now - lastBubbleAt < BUBBLE_COOLDOWN_MS) return
     lastBubbleAt = now
     bubble.textContent = text
     bubble.style.opacity = '1'
@@ -548,6 +548,6 @@ export function apply(ctx: ClientContext): void {
       order: 200,
       label: () => '桌宠配置',
     },
-    (props: unknown) => createElement(PetSettingsSection, props as { close: () => void }),
+    () => createElement(PetSettingsSection),
   ))
 }

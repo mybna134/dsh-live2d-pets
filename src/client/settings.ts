@@ -23,10 +23,6 @@ export interface PetSettingsValue {
   customModels: CustomModelEntry[]
 }
 
-export interface PetSettingsSectionProps {
-  close: () => void
-}
-
 interface SettingsView {
   value?: PetSettingsValue
   writable?: boolean
