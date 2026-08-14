@@ -13,7 +13,20 @@ DSH（DeepSeek Harness）的 Live2D 桌宠插件：**Agent 状态镜像 + 互动
 
 ## 快速开始
 
-在 DSH 中安装插件（`web` profile 首次使用时自动初始化）：
+### 方式一：复制提示词让 agent 安装（推荐）
+
+把下面这段提示词复制给你的 DSH agent（在 Web GUI 对话中直接粘贴即可），它会自己安装并验证：
+
+```text
+请帮我安装 dsh-live2d-pets 插件（DSH 的 Live2D 桌宠插件）：
+1. 执行 dsh plugin --profile web add dsh-live2d-pets 安装
+2. 执行 dsh plugin --profile web list，确认 dsh-live2d-pets 出现在已安装列表中
+3. 告诉我安装结果；如果失败，请附上错误信息
+```
+
+### 方式二：手动安装
+
+在终端执行（`web` profile 首次使用时自动初始化）：
 
 ```sh
 dsh plugin --profile web add dsh-live2d-pets
