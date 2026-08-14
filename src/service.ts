@@ -2,6 +2,7 @@
  * PetService：宠物状态机 + 显示配置 + 持久化。
  * 状态源为 DSH 真实事件（Event.listEvents 实测）：
  *   agent/status（idle⇄running）、agent/error、agent/turn-stopping、approval/request。
+ * 配置经 getConfig() 读取 settings 解析值（schema 默认 → base → 用户层）。
  * @module dsh-live2d-pets/service
  */
 
@@ -9,6 +10,8 @@ import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-user-approval'
 import type { Config } from './index.ts'
+import type { CustomModelEntry } from './models.ts'
+import { resolveModelUrl } from './models.ts'
 import {
   loadPetPersist,
   savePetPersist,
@@ -24,8 +27,9 @@ export interface PetStateView {
   config: {
     enabled: boolean
     size: number
-    corner: string
     model: string
+    /** 解析后的 .model3.json URL（模型 id → URL，spec §6）。 */
+    modelUrl: string | null
     debug: boolean
   }
   display: PetDisplay
@@ -44,7 +48,7 @@ export class PetService {
 
   constructor(
     private readonly ctx: Context,
-    private readonly config: Config,
+    private readonly getConfig: () => Config,
   ) {
     this.display = loadPetPersist()
     // 卸载时清理"完成"保持计时器
@@ -92,21 +96,27 @@ export class PetService {
     }, DONE_HOLD_MS)
   }
 
-  /** 浏览器轮询用的状态快照。 */
+  /** 浏览器轮询用的状态快照（配置实时读取 settings 解析值）。 */
   snapshot(): PetStateView {
+    const config = this.getConfig()
     return {
       state: this.state,
       agent: this.agent,
       config: {
-        enabled: this.config.enabled,
-        size: this.config.size,
-        corner: this.config.corner,
-        model: this.config.model,
-        debug: this.config.debug,
+        enabled: config.enabled,
+        size: config.size,
+        model: config.model,
+        modelUrl: resolveModelUrl(config.model, config.customModels),
+        debug: config.debug,
       },
       display: { ...this.display },
       version: this.version,
     }
+  }
+
+  /** 用户自定义模型列表（设置面板模型列表的 custom 部分，Host 权威视图）。 */
+  listCustomModels(): CustomModelEntry[] {
+    return this.getConfig().customModels
   }
 
   /** 更新显示配置（拖动/尺寸）并持久化。 */

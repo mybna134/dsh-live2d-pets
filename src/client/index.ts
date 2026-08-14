@@ -1,5 +1,5 @@
 /**
- * dsh-live2d-pets 浏览器半区：挂载 Live2D 桌宠。
+ * dsh-live2d-pets 浏览器半区：挂载 Live2D 桌宠 + 「桌宠配置」设置页。
  *
  * 架构（ADR-005 / 004，spike pkg-9 实证）：
  * - `shell.overlay` 注册零尺寸锚点（生命周期/设置锚点）
@@ -7,12 +7,15 @@
  * - 运行时脚本与预设模型走 Host 同源路由（/pet-assets/*），无 CDN 依赖
  * - agent 状态经 /api/live2d-pet/state 轮询（800ms，标签页隐藏暂停）
  * - 点击/拖动按 6px 阈值判定；自由位置拖动，松手持久化（spec §4）
+ * - 配置（enabled/size/debug/model）经轮询运行时应用：开关→显隐+停启渲染、
+ *   尺寸→重设画布与模型适配、调试→动态面板、模型→按 modelUrl 重载（spec §2/§6/§7）
  * @module dsh-live2d-pets/client
  */
 
 import { createElement, useEffect, useRef } from 'react'
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 import type { PetState, PetStateView } from '../service.ts'
+import { PetSettingsSection } from './settings.ts'
 
 /** 注入所需服务。 */
 export const inject = ['slots']
@@ -52,7 +55,12 @@ const PET_API = '/api/live2d-pet'
 declare const PIXI: {
   Application: new (options: Record<string, unknown>) => {
     stage: { addChild(child: unknown): unknown }
-    ticker: { addOnce(fn: () => void): unknown }
+    ticker: {
+      addOnce(fn: () => void): unknown
+      start(): unknown
+      stop(): unknown
+    }
+    renderer: { resize(width: number, height: number): unknown }
     destroy(remove: boolean): void
   }
   Point: new (x: number, y: number) => unknown
@@ -66,7 +74,16 @@ declare const PIXI: {
 /** 最小 slots 服务结构类型（运行时由 DSH 提供）。 */
 interface SlotsLike {
   inject(key: string, callback: () => () => void): () => void
-  register(options: { name: string; id: string }, component: () => unknown): () => void
+  register(
+    options: {
+      name: string
+      id: string
+      order?: number
+      label?: string | (() => string)
+      inject?: () => Record<string, unknown>
+    },
+    component: (props: unknown) => unknown,
+  ): () => void
 }
 
 interface DisplayLike { right: number; bottom: number; size: number }
@@ -122,13 +139,25 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
   let app: {
     destroy(remove?: boolean): void
     stage: { addChild(child: unknown): unknown }
-    ticker: { addOnce(fn: () => void): unknown }
+    ticker: {
+      addOnce(fn: () => void): unknown
+      start(): unknown
+      stop(): unknown
+    }
+    renderer: { resize(width: number, height: number): unknown }
   } | null = null
   let model: ModelLike | null = null
   let hitAreas: string[] = []
+  let currentModelUrl: string | null = null
+  let fallbackShown = false
+  // 模型基础尺寸（scale=1 时捕获一次；Pixi Container.width 含当前 scale，
+  // 若每次 fit 都现读会按 1/s0 累积误差导致越放越大被画布裁剪）
+  let baseModelW = 0
+  let baseModelH = 0
   let lastBubbleAt = 0
   let lastState: PetState | null = null
   let demoState: PetState | null = null
+  let view: PetStateView | null = null
   let pos: DisplayLike = { right: 24, bottom: 20, size: 160 }
 
   function showBubble(text: string, force = false): void {
@@ -153,8 +182,8 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
     }
   }
 
-  function applyState(view: PetStateView | null): void {
-    const state = demoState ?? view?.state ?? 'idle'
+  function applyState(next: PetStateView | null): void {
+    const state = demoState ?? next?.state ?? 'idle'
     // 状态变化时播状态气泡（spec §3，走气泡冷却防刷屏）
     if (state !== lastState) {
       lastState = state
@@ -164,9 +193,149 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
     playState(state)
     if (debugEl) {
       debugEl.textContent =
-        `agent: ${view?.agent ?? '-'}  pet: ${state}  v${view?.version ?? '-'}\n` +
+        `agent: ${next?.agent ?? '-'}  pet: ${state}  v${next?.version ?? '-'}\n` +
         `hitAreas: ${hitAreas.join(',') || '-'}\n` +
         `pos: ${Math.round(pos.right)},${Math.round(pos.bottom)}  size: ${pos.size}`
+    }
+  }
+
+  /** 静态头像降级（WebGL 不可用 / 模型加载失败，spec §7）。 */
+  function showFallback(): void {
+    if (!box || fallbackShown) return
+    fallbackShown = true
+    const fallback = document.createElement('div')
+    fallback.style.cssText = 'pointer-events:auto;width:64px;height:64px;display:flex;align-items:center;justify-content:center;font-size:36px;background:linear-gradient(135deg,#667eea,#764ba2);border-radius:16px;color:#fff'
+    fallback.textContent = '🐾'
+    box.appendChild(fallback)
+  }
+
+  /** 按当前尺寸重新适配模型（画布已就绪时调用；基准尺寸为 scale=1 时捕获值）。 */
+  function fitModel(size: number): void {
+    if (!model || !canvas) return
+    const w = baseModelW
+    const h = baseModelH
+    if (w > 0 && h > 0) {
+      const s = Math.min((size - 8) / w, (Math.round(size * 1.2) - 8) / h)
+      model.scale.set(s)
+      model.anchor.set(0.5, 0.5)
+      model.position.set(canvas.width / 2, canvas.height / 2)
+    }
+  }
+
+  /** 加载/重载模型层：销毁旧层 → 新建画布与 PIXI app → 绑定指针事件。 */
+  async function loadModelLayer(url: string | null): Promise<void> {
+    // 销毁旧层
+    if (app) { try { app.destroy(true) } catch { /* 已销毁 */ } }
+    app = null
+    model = null
+    hitAreas = []
+    baseModelW = 0
+    baseModelH = 0
+    if (canvas && canvas.parentNode) canvas.parentNode.removeChild(canvas)
+    canvas = null
+    fallbackShown = false
+    if (!url || !box) {
+      showFallback()
+      return
+    }
+    try {
+      canvas = document.createElement('canvas')
+      const size = pos.size
+      canvas.width = size
+      canvas.height = Math.round(size * 1.2)
+      canvas.style.cssText = 'pointer-events:auto;display:block'
+      box.appendChild(canvas)
+
+      const M = PIXI.live2d?.Live2DModel
+      if (!M) throw new Error('Live2DModel 不可用')
+
+      app = new PIXI.Application({ view: canvas, width: canvas.width, height: canvas.height, backgroundAlpha: 0 })
+      pushCleanup(() => { try { app?.destroy(true) } catch { /* 已销毁 */ } })
+
+      const loaded = await M.from(url, { autoInteract: false }) as ModelLike
+      model = loaded
+      // 基础尺寸：scale=1 时捕获（Pixi Container.width 含当前 scale，必须固定基准）
+      baseModelW = Number(loaded.width) || 0
+      baseModelH = Number(loaded.height) || 0
+      app.stage.addChild(loaded)
+      hitAreas = Object.keys(loaded.internalModel?.hitAreas ?? {})
+      fitModel(pos.size)
+      // 首帧尺寸未知时延迟适配
+      if (!(baseModelW > 0 && baseModelH > 0)) {
+        try { app.ticker.addOnce(() => fitModel(pos.size)) } catch { /* 首帧适配 */ }
+      }
+      if (lastState) playState(lastState)
+
+      // 指针事件（新 canvas；点击/拖动 6px 阈值）
+      canvas.addEventListener('pointerdown', handlePointerDown)
+      canvas.addEventListener('pointermove', handlePointerMove)
+      canvas.addEventListener('pointerup', handlePointerUp)
+      canvas.addEventListener('pointercancel', () => { down = null; dragging = false })
+    } catch {
+      // 加载失败 → 静态头像（spec §7）
+      try { app?.destroy(true) } catch { /* 已销毁 */ }
+      app = null
+      model = null
+      if (canvas && canvas.parentNode) canvas.parentNode.removeChild(canvas)
+      canvas = null
+      showFallback()
+    }
+  }
+
+  /** 模型重载队列：串行执行，避免快速切换时并发加载。 */
+  let modelLoadQueue: Promise<void> = Promise.resolve()
+  function queueModelLoad(url: string | null): void {
+    modelLoadQueue = modelLoadQueue.then(() => loadModelLayer(url)).catch(() => {})
+  }
+
+  /** 调试面板动态开关（spec §2）。 */
+  function ensureDebugPanel(show: boolean): void {
+    if (show && !debugEl && box) {
+      debugEl = document.createElement('div')
+      debugEl.style.cssText = 'pointer-events:auto;margin-top:6px;padding:6px 8px;background:rgba(20,20,32,.9);color:#e8e8f0;border-radius:8px;font:11px/1.5 ui-monospace,monospace;white-space:pre-wrap;width:220px'
+      const demoRow = document.createElement('div')
+      demoRow.style.cssText = 'margin-top:4px;display:flex;gap:4px'
+      for (const st of ['idle', 'thinking', 'done', 'error'] as const) {
+        const btn = document.createElement('button')
+        btn.textContent = st
+        btn.onclick = () => { demoState = demoState === st ? null : st; applyState(view) }
+        demoRow.appendChild(btn)
+      }
+      debugEl.appendChild(demoRow)
+      box.appendChild(debugEl)
+      applyState(view)
+    } else if (!show && debugEl) {
+      debugEl.parentNode?.removeChild(debugEl)
+      debugEl = null
+    }
+  }
+
+  /** 运行时应用配置变化（spec §2/§6/§7）：开关 / 尺寸 / 调试 / 模型。 */
+  function applyConfig(next: PetStateView): void {
+    const cfg = next.config
+    // 开关：显示/隐藏 + 暂停/恢复渲染循环（隐藏近似零开销）
+    if (box) box.style.display = cfg.enabled ? '' : 'none'
+    if (app) {
+      if (cfg.enabled) { try { app.ticker.start() } catch { /* 已启动 */ } }
+      else { try { app.ticker.stop() } catch { /* 已停止 */ } }
+    }
+    // 调试面板
+    ensureDebugPanel(cfg.debug)
+    // 尺寸：重设画布 + 模型适配
+    const nextSize = cfg.size
+    if (nextSize !== pos.size) {
+      pos.size = nextSize
+      if (canvas && app && model) {
+        canvas.width = nextSize
+        canvas.height = Math.round(nextSize * 1.2)
+        try { app.renderer.resize(canvas.width, canvas.height) } catch { /* 旧渲染器 */ }
+        fitModel(nextSize)
+      }
+    }    // 模型：modelUrl 变化 → 重载
+    const nextUrl = cfg.modelUrl || null
+    if (nextUrl !== currentModelUrl) {
+      currentModelUrl = nextUrl
+      queueModelLoad(nextUrl)
     }
   }
 
@@ -228,7 +397,6 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
   void (async () => {
     try {
       // 1. 初始状态（配置 + 显示位置）
-      let view: PetStateView | null = null
       try { view = await api.state() } catch { /* 首帧前 API 不可用则用默认 */ }
       if (view) pos = { ...view.display, size: view.config.size }
 
@@ -251,69 +419,12 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
       // 3. vendor 脚本（Host 同源）
       for (const src of VENDOR_SCRIPTS) await loadScript(src)
 
-      // 4. 模型（config.model：URL 直载；预设 id 待预设定稿后支持）
-      const modelUrl = view?.config.model && /^https?:\/\//.test(view.config.model) ? view.config.model : null
-      if (!modelUrl) throw new Error('未配置模型 URL（预设待定稿，可在 config 中填 model URL）')
-      canvas = document.createElement('canvas')
-      const size = pos.size
-      canvas.width = size
-      canvas.height = Math.round(size * 1.2)
-      canvas.style.cssText = 'pointer-events:auto;display:block'
-      box.appendChild(canvas)
+      // 4. 初始模型（config.modelUrl：Host 解析后的 .model3.json URL，spec §6）
+      const initialUrl = view?.config.modelUrl || null
+      currentModelUrl = initialUrl
+      await loadModelLayer(initialUrl)
 
-      const M = PIXI.live2d?.Live2DModel
-      if (!M) throw new Error('Live2DModel 不可用')
-
-      app = new PIXI.Application({ view: canvas, width: canvas.width, height: canvas.height, backgroundAlpha: 0 })
-      pushCleanup(() => { try { app?.destroy(true) } catch { /* 已销毁 */ } })
-
-      const loaded = await M.from(modelUrl, { autoInteract: false }) as ModelLike
-      model = loaded
-      app.stage.addChild(loaded)
-      hitAreas = Object.keys(loaded.internalModel?.hitAreas ?? {})
-      const fit = () => {
-        const w = Number(loaded.width) || 0
-        const h = Number(loaded.height) || 0
-        if (w > 0 && h > 0) {
-          const s = Math.min((size - 8) / w, (Math.round(size * 1.2) - 8) / h)
-          loaded.scale.set(s)
-          loaded.anchor.set(0.5, 0.5)
-          loaded.position.set(canvas!.width / 2, canvas!.height / 2)
-          return true
-        }
-        return false
-      }
-      if (!fit()) { try { app.ticker.addOnce(() => fit()) } catch { /* 首帧适配 */ } }
-      playState('idle')
-
-      // 5. 指针事件（点击/拖动）
-      canvas.addEventListener('pointerdown', handlePointerDown)
-      canvas.addEventListener('pointermove', handlePointerMove)
-      canvas.addEventListener('pointerup', handlePointerUp)
-      canvas.addEventListener('pointercancel', () => { down = null; dragging = false })
-      pushCleanup(() => {
-        canvas?.removeEventListener('pointerdown', handlePointerDown)
-        canvas?.removeEventListener('pointermove', handlePointerMove)
-        canvas?.removeEventListener('pointerup', handlePointerUp)
-      })
-
-      // 6. 调试面板（config.debug，spec §2）
-      if (view?.config.debug) {
-        debugEl = document.createElement('div')
-        debugEl.style.cssText = 'pointer-events:auto;margin-top:6px;padding:6px 8px;background:rgba(20,20,32,.9);color:#e8e8f0;border-radius:8px;font:11px/1.5 ui-monospace,monospace;white-space:pre-wrap;width:220px'
-        const demoRow = document.createElement('div')
-        demoRow.style.cssText = 'margin-top:4px;display:flex;gap:4px'
-        for (const st of ['idle', 'thinking', 'done', 'error'] as const) {
-          const btn = document.createElement('button')
-          btn.textContent = st
-          btn.onclick = () => { demoState = demoState === st ? null : st; applyState(view) }
-          demoRow.appendChild(btn)
-        }
-        debugEl.appendChild(demoRow)
-        box.appendChild(debugEl)
-      }
-
-      // 7. 状态轮询（visibility-aware）
+      // 5. 状态轮询（visibility-aware；同时把配置变化运行时应用到宠物）
       let interval: number | undefined
       const stopPoll = () => { if (interval !== undefined) { window.clearInterval(interval); interval = undefined } }
       const startPoll = () => {
@@ -322,7 +433,9 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
           try {
             const next = await api.state()
             view = next
-            pos = { ...next.display, size: next.config.size }
+            // 位置取持久化值；渲染尺寸保持现状，由 applyConfig 负责 diff 与更新
+            pos = { right: next.display.right, bottom: next.display.bottom, size: pos.size }
+            applyConfig(next)
             applyState(next)
           } catch { /* 下次轮询重试 */ }
         }, POLL_MS)
@@ -337,15 +450,15 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
         stopPoll()
         document.removeEventListener('visibilitychange', onVisibility)
       })
-      applyState(view)
+
+      // 6. 初始应用（含开关/尺寸/调试/模型）
+      if (view) {
+        applyConfig(view)
+        applyState(view)
+      }
     } catch (error) {
       // 静态头像降级（WebGL 不可用 / 模型加载失败，spec §7）
-      if (box) {
-        const fallback = document.createElement('div')
-        fallback.style.cssText = 'pointer-events:auto;width:64px;height:64px;display:flex;align-items:center;justify-content:center;font-size:36px;background:linear-gradient(135deg,#667eea,#764ba2);border-radius:16px;color:#fff'
-        fallback.textContent = '🐾'
-        box.appendChild(fallback)
-      }
+      showFallback()
     }
   })()
 
@@ -359,5 +472,18 @@ export function apply(ctx: ClientContext): void {
   slots.inject('shell.overlay', () => slots.register(
     { name: 'shell.overlay', id: 'live2d-pet' },
     () => createElement(PetAnchor),
+  ))
+
+  // 桌宠配置设置页（settings.section，spec §2）：四项设置，读写经插件自身 API
+  // （/api/live2d-pet/settings，Host 直连 ctx.settings；不走 settingsScope wire，
+  // 见 docs/research/settings-tab.md「设置服务不可用」根因）。
+  slots.inject('settings.section', () => slots.register(
+    {
+      name: 'settings.section',
+      id: 'live2d-pet',
+      order: 200,
+      label: () => '桌宠配置',
+    },
+    (props: unknown) => createElement(PetSettingsSection, props as { close: () => void }),
   ))
 }

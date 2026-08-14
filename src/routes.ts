@@ -11,6 +11,14 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import type { PetService } from './service.ts'
+import { listBuiltinPresets } from './models.ts'
+import type { SettingsPathOp } from '@deepseek-ai/dsh-settings'
+
+/** 设置读写 API（Host 直连 ctx.settings；不走 wire 白名单，见 research/settings-tab.md）。 */
+export interface SettingsRoutesApi {
+  view(): { value: unknown; writable: boolean }
+  write(ops: readonly SettingsPathOp[]): Promise<void>
+}
 
 /** 浏览器侧宠物 API 基路径。 */
 export const PET_API_PREFIX = '/api/live2d-pet'
@@ -101,11 +109,57 @@ function postRoute(path: string, run: (body: Record<string, unknown>) => Promise
   }
 }
 
+/**
+ * 同一 path 上挂 GET + POST（webServer 按 path 唯一注册，不按 method 分表；
+ * 见 dsh-host-webserver register：duplicate exact route）。
+ */
+function getPostRoute(
+  path: string,
+  get: () => Promise<unknown>,
+  post: (body: Record<string, unknown>) => Promise<unknown>,
+): WebRoute {
+  return {
+    kind: 'exact',
+    path,
+    handler: (req: IncomingMessage, res: ServerResponse): void | Promise<void> => {
+      if (req.method === 'GET') {
+        return get().then((value) => json(res, 200, value), (error) => {
+          json(res, 500, { ok: false, error: error instanceof Error ? error.message : String(error) })
+        })
+      }
+      if (req.method === 'POST') {
+        return readJsonBody(req).then((body) => {
+          const record = typeof body === 'object' && body !== null ? body as Record<string, unknown> : {}
+          return post(record).then(
+            (value) => json(res, 200, value),
+            (error) => json(res, 400, { ok: false, error: error instanceof Error ? error.message : String(error) }),
+          )
+        }, (error) => {
+          json(res, 400, { ok: false, error: error instanceof Error ? error.message : String(error) })
+        })
+      }
+      json(res, 405, { ok: false, error: 'method-not-allowed' })
+    },
+  }
+}
+
 /** 构建完整路由族（API + 素材）供 ctx.webServer.register。 */
-export function makePetRoutes(deps: { service: PetService; packageRoot: string }): WebRoute[] {
-  const { service, packageRoot } = deps
+export function makePetRoutes(deps: { service: PetService; packageRoot: string; settings: SettingsRoutesApi }): WebRoute[] {
+  const { service, packageRoot, settings } = deps
   const apiRoutes: WebRoute[] = [
     getRoute(`${PET_API_PREFIX}/state`, async () => service.snapshot()),
+    getRoute(`${PET_API_PREFIX}/models`, async () => ({
+      builtin: listBuiltinPresets(),
+      custom: service.listCustomModels(),
+    })),
+    getPostRoute(
+      `${PET_API_PREFIX}/settings`,
+      async () => settings.view(),
+      (body) => {
+        const ops = Array.isArray(body.ops) ? body.ops as SettingsPathOp[] : []
+        return settings.write(ops).then(() => settings.view())
+      },
+    ),
     postRoute(`${PET_API_PREFIX}/set-display`, (body) => {
       const patch: { right?: number; bottom?: number; size?: number } = {}
       if (typeof body.right === 'number') patch.right = body.right

@@ -1,12 +1,60 @@
 {
-  "version": 2,
-  "note": "策展模型 URL 清单（spec §6）：模型一律 URL 直载，不随包分发任何模型文件。清单门槛 = 许可可标注——每条记录许可类型与链接即可收录，不做许可合规判断；NC（禁止商用）模型可收录但必须标注「仅限非商用」。默认模型保持商用安全（Hiyori）。",
+  "version": 3,
+  "note": "策展模型 URL 清单（spec §6）：模型一律 URL 直载，不随包分发任何模型文件。清单门槛 = 许可可标注——每条记录许可类型与链接即可收录，不做许可合规判断；NC（禁止商用）模型可收录但必须标注「仅限非商用」。默认模型保持商用安全（Hiyori）。条目需逐个在设置面板实测渲染（失败显示静态头像），Cubism 5 格式与 Cubism Core 4 兼容性未验证（ADR-003）。",
   "presets": [
     {
       "id": "hiyori",
       "name": "Hiyori（百瀬ひより）",
       "author": "Live2D Inc.",
       "modelUrl": "https://cdn.jsdelivr.net/gh/Live2D/CubismWebSamples@develop/Samples/Resources/Hiyori/Hiyori.model3.json",
+      "license": {
+        "type": "Live2D 示例模型条款（免费商用可，需标注著作权）",
+        "url": "https://www.live2d.com/eula/live2d-sample-model-terms_cn.html"
+      },
+      "cubism": 4,
+      "status": "annotated"
+    },
+    {
+      "id": "haru",
+      "name": "Haru（春）",
+      "author": "Live2D Inc.",
+      "modelUrl": "https://cdn.jsdelivr.net/gh/Live2D/CubismWebSamples@develop/Samples/Resources/Haru/Haru.model3.json",
+      "license": {
+        "type": "Live2D 示例模型条款（免费商用可，需标注著作权）",
+        "url": "https://www.live2d.com/eula/live2d-sample-model-terms_cn.html"
+      },
+      "cubism": 4,
+      "status": "annotated"
+    },
+    {
+      "id": "mao",
+      "name": "Mao",
+      "author": "Live2D Inc.",
+      "modelUrl": "https://cdn.jsdelivr.net/gh/Live2D/CubismWebSamples@develop/Samples/Resources/Mao/Mao.model3.json",
+      "license": {
+        "type": "Live2D 示例模型条款（免费商用可，需标注著作权）",
+        "url": "https://www.live2d.com/eula/live2d-sample-model-terms_cn.html"
+      },
+      "cubism": 4,
+      "status": "annotated"
+    },
+    {
+      "id": "mark",
+      "name": "Mark",
+      "author": "Live2D Inc.",
+      "modelUrl": "https://cdn.jsdelivr.net/gh/Live2D/CubismWebSamples@develop/Samples/Resources/Mark/Mark.model3.json",
+      "license": {
+        "type": "Live2D 示例模型条款（免费商用可，需标注著作权）",
+        "url": "https://www.live2d.com/eula/live2d-sample-model-terms_cn.html"
+      },
+      "cubism": 4,
+      "status": "annotated"
+    },
+    {
+      "id": "natori",
+      "name": "Natori",
+      "author": "Live2D Inc.",
+      "modelUrl": "https://cdn.jsdelivr.net/gh/Live2D/CubismWebSamples@develop/Samples/Resources/Natori/Natori.model3.json",
       "license": {
         "type": "Live2D 示例模型条款（免费商用可，需标注著作权）",
         "url": "https://www.live2d.com/eula/live2d-sample-model-terms_cn.html"
