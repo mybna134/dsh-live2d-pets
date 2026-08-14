@@ -9,7 +9,7 @@
  * @module dsh-live2d-pets/client/settings
  */
 
-import { createElement, useCallback, useEffect, useState } from 'react'
+import { createElement, useCallback, useEffect, useRef, useState } from 'react'
 import type { CSSProperties, ChangeEvent, MouseEvent, ReactNode, ReactElement } from 'react'
 import type { CustomModelEntry } from '../index.ts'
 import type { BuiltinPreset } from '../models.ts'
@@ -100,6 +100,9 @@ const sectionTitleStyle: CSSProperties = {
   color: '#888',
 }
 
+/** 设置路径 op（与 Host settings.mutate 对齐）。 */
+type SettingsOp = { op: 'set' | 'unset'; path: string[]; value?: unknown }
+
 /** 读取设置（GET）。 */
 async function loadSettings(): Promise<SettingsView | null> {
   try {
@@ -112,7 +115,7 @@ async function loadSettings(): Promise<SettingsView | null> {
 }
 
 /** 写入设置（POST 路径 op；返回写后视图）。 */
-async function writeSettings(ops: Array<{ op: 'set' | 'unset'; path: string[]; value?: unknown }>): Promise<SettingsView | null> {
+async function writeSettings(ops: SettingsOp[]): Promise<SettingsView | null> {
   try {
     const response = await fetch(SETTINGS_API, {
       method: 'POST',
@@ -154,13 +157,20 @@ function modelRow(
 
 export function PetSettingsSection(): ReactNode {
   const [state, setState] = useState<SettingsState>({ status: 'loading', writable: false })
+  // 最新视图 ref：写入 ops 在出队时按最新状态合成，避免快速操作读到过期闭包
+  const stateRef = useRef(state)
+  const setSettingsState = (next: SettingsState | ((prev: SettingsState) => SettingsState)): void => {
+    const resolved = typeof next === 'function' ? next(stateRef.current) : next
+    stateRef.current = resolved
+    setState(resolved)
+  }
   const reload = useCallback(() => {
     loadSettings().then((view) => {
       if (view === null) {
-        setState((prev) => prev.status === 'ready' ? prev : { status: 'unavailable', writable: false })
+        setSettingsState((prev) => prev.status === 'ready' ? prev : { status: 'unavailable', writable: false })
         return
       }
-      setState({ status: 'ready', value: view.value, writable: view.writable !== false })
+      setSettingsState({ status: 'ready', value: view.value, writable: view.writable !== false })
     })
   }, [])
   useEffect(() => { reload() }, [reload])
@@ -188,7 +198,8 @@ export function PetSettingsSection(): ReactNode {
   const size = draftSize ?? value.size
   const commitSize = () => {
     if (draftSize === null) return
-    applyWrite([{ op: 'set', path: ['size'], value: draftSize }])
+    const nextSize = draftSize
+    enqueueWrite(() => [{ op: 'set', path: ['size'], value: nextSize }])
     setDraftSize(null)
   }
 
@@ -201,9 +212,15 @@ export function PetSettingsSection(): ReactNode {
 
   const custom = value.customModels ?? []
 
-  const applyWrite = (ops: Array<{ op: 'set' | 'unset'; path: string[]; value?: unknown }>) => {
-    writeSettings(ops).then((view) => {
-      if (view !== null) setState({ status: 'ready', value: view.value, writable: view.writable !== false })
+  // 写入串行化：ops 在出队时基于最新视图合成。若直接用渲染闭包里的
+  // custom/value 组合完整数组替换，快速连续操作（如连删两个模型）会
+  // 读到过期状态，后到的写覆盖先到的，导致已删条目被"复活"。
+  const writeQueue = useRef<Promise<void>>(Promise.resolve())
+  const enqueueWrite = (compose: (current: PetSettingsValue) => SettingsOp[]): void => {
+    writeQueue.current = writeQueue.current.then(async () => {
+      const current = stateRef.current.value ?? DEFAULT_VALUE
+      const view = await writeSettings(compose(current))
+      if (view !== null) setSettingsState({ status: 'ready', value: view.value, writable: view.writable !== false })
     })
   }
 
@@ -212,7 +229,7 @@ export function PetSettingsSection(): ReactNode {
     const url = newUrl.trim()
     if (!name || !/^https?:\/\//.test(url)) return
     const entry: CustomModelEntry = { id: `m${Date.now()}`, name, modelUrl: url }
-    applyWrite([{ op: 'set', path: ['customModels'], value: [...custom, entry] }])
+    enqueueWrite((current) => [{ op: 'set', path: ['customModels'], value: [...current.customModels, entry] }])
     setNewName('')
     setNewUrl('')
   }
@@ -221,23 +238,29 @@ export function PetSettingsSection(): ReactNode {
     const name = editName.trim()
     const url = editUrl.trim()
     if (!name || !/^https?:\/\//.test(url)) return
-    applyWrite([{ op: 'set', path: ['customModels'], value: custom.map((c) => (c.id === id ? { ...c, name, modelUrl: url } : c)) }])
+    enqueueWrite((current) => [
+      { op: 'set', path: ['customModels'], value: current.customModels.map((c) => (c.id === id ? { ...c, name, modelUrl: url } : c)) },
+    ])
     setEditId(null)
   }
 
   const removeModel = (id: string) => {
-    const ops: Array<{ op: 'set' | 'unset'; path: string[]; value?: unknown }> = [
-      { op: 'set', path: ['customModels'], value: custom.filter((c) => c.id !== id) },
-    ]
-    if (value.model === id) ops.push({ op: 'set', path: ['model'], value: builtin[0]?.id ?? 'hiyori' })
-    applyWrite(ops)
+    // 删除的是当前选中模型时，回退到第一个内置模型（builtin 加载完成前用默认 id）
+    const fallbackModel = builtin[0]?.id ?? 'hiyori'
+    enqueueWrite((current) => {
+      const ops: SettingsOp[] = [
+        { op: 'set', path: ['customModels'], value: current.customModels.filter((c) => c.id !== id) },
+      ]
+      if (current.model === id) ops.push({ op: 'set', path: ['model'], value: fallbackModel })
+      return ops
+    })
   }
 
   // ---- 组装页面 ----
   const builtinRows = builtin.map((p) => modelRow(
     `builtin-${p.id}`,
     value.model === p.id,
-    () => applyWrite([{ op: 'set', path: ['model'], value: p.id }]),
+    () => enqueueWrite(() => [{ op: 'set', path: ['model'], value: p.id }]),
     `${p.name}（${p.author}）`,
     !writable,
     undefined,
@@ -273,7 +296,7 @@ export function PetSettingsSection(): ReactNode {
     return modelRow(
       `custom-${c.id}`,
       value.model === c.id,
-      () => applyWrite([{ op: 'set', path: ['model'], value: c.id }]),
+      () => enqueueWrite(() => [{ op: 'set', path: ['model'], value: c.id }]),
       c.name,
       !writable,
       createElement('span', { key: 'actions' },
@@ -303,7 +326,7 @@ export function PetSettingsSection(): ReactNode {
         type: 'checkbox',
         checked: !!value.enabled,
         disabled: !writable,
-        onChange: (e: ChangeEvent<HTMLInputElement>) => applyWrite([{ op: 'set', path: ['enabled'], value: e.target.checked }]),
+        onChange: (e: ChangeEvent<HTMLInputElement>) => enqueueWrite(() => [{ op: 'set', path: ['enabled'], value: e.target.checked }]),
       }),
       createElement('span', null, '显示宠物'),
     ),
@@ -362,7 +385,7 @@ export function PetSettingsSection(): ReactNode {
         type: 'checkbox',
         checked: !!value.debug,
         disabled: !writable,
-        onChange: (e: ChangeEvent<HTMLInputElement>) => applyWrite([{ op: 'set', path: ['debug'], value: e.target.checked }]),
+        onChange: (e: ChangeEvent<HTMLInputElement>) => enqueueWrite(() => [{ op: 'set', path: ['debug'], value: e.target.checked }]),
       }),
       createElement('span', null, '调试模式（显示调试面板）'),
     ),
