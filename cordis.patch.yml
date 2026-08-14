@@ -1,0 +1,5 @@
+# dsh-live2d-pets bundle patch: inserts the plugin row into the web roster.
+# 安装：`dsh plugin --profile web add dsh-live2d-pets`（官方 publish.md 流程）
+- insert:
+    - id: live2d-pet
+      name: dsh-live2d-pets
