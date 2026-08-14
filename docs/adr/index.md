@@ -6,5 +6,6 @@
 
 | ADR | 标题 | 状态 |
 |-----|------|------|
-| [001](001-rendering-pixi-live2d-display-advanced.md) | Live2D 渲染选型：pixi-live2d-display-advanced | Accepted |
+| [001](001-rendering-pixi-live2d-display-advanced.md) | Live2D 渲染选型：pixi-live2d-display-advanced | Superseded by ADR-003 |
 | [002](002-pet-mount-and-state-source.md) | 宠物挂载点与状态事件源 | Accepted |
+| [003](003-spike-results-and-rendering-stack.md) | 渲染栈落地与 spike 验证结果 | Accepted |

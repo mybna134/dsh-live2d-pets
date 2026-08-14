@@ -73,11 +73,11 @@ DSH Web GUI 中一只悬浮于角落的 Live2D 桌宠，实时镜像当前会话
 
 ## 9. 技术边界（实现约定，非用户行为）
 
-- 渲染：pixi-live2d-display-advanced + PixiJS v7 + Cubism Core 4（ADR-001）
+- 渲染：pixi-live2d-display 0.4.0 + PixiJS 6.5.10 + Cubism Core 4（ADR-003；ADR-001 已被其取代）
 - 挂载：Client Slot `shell.overlay`；设置入口 `settings.plugin.item` / `settings.section`（ADR-002）
 - 状态源：Host 订阅 `agent/status`、`agent/error`、`agent/turn-stopping` 等（ADR-002）
 - 预设模型许可合规为硬约束；SDK 按 Live2D 官方条款
-- **spike 待验证**：Host→Client 状态推送机制、脚本加载方式（CDN/Host 托管）、Cubism 5 模型兼容性、WebGL 客户端可用性
+- **spike 结果（见 ADR-003）**：WebGL ✅ / DOM·script 注入 ✅ / CDN 脚本加载 ✅ / Host→Client 轮询 ✅ / 模型渲染 ✅ / 动作·表情 ✅ / 触摸命中 ✅；Cubism 5 兼容未验证
 - **待定项（承接自 ideas 草稿，已并入）**：
   - 插件分发/安装形态：cordis.yml 插件行 vs marketplace vs npm 包（决定交付物结构）
   - 模型资产托管方式：随包内置 vs 首次使用时远程拉取（影响安装体积）
