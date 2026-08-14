@@ -1,30 +1,18 @@
 {
-  "version": 1,
-  "note": "预设模型清单。硬约束：模型必须允许「再分发 + 商用」；须为 Cubism 4 兼容（ADR-003）。每个预设的许可文本需逐一核实后填写 license.url（spec §6）。",
+  "version": 2,
+  "note": "策展模型 URL 清单（spec §6）：模型一律 URL 直载，不随包分发任何模型文件。清单门槛 = 许可可标注——每条记录许可类型与链接即可收录，不做许可合规判断；NC（禁止商用）模型可收录但必须标注「仅限非商用」。默认模型保持商用安全（Hiyori）。",
   "presets": [
     {
-      "id": "preset-1",
-      "name": "待定",
-      "author": "待定",
-      "modelUrl": "",
+      "id": "hiyori",
+      "name": "Hiyori（百瀬ひより）",
+      "author": "Live2D Inc.",
+      "modelUrl": "https://cdn.jsdelivr.net/gh/Live2D/CubismWebSamples@develop/Samples/Resources/Hiyori/Hiyori.model3.json",
       "license": {
-        "type": "待定（CC-BY 或作者明示允许再分发）",
-        "url": ""
+        "type": "Live2D 示例模型条款（免费商用可，需标注著作权）",
+        "url": "https://www.live2d.com/eula/live2d-sample-model-terms_cn.html"
       },
       "cubism": 4,
-      "status": "curating"
-    },
-    {
-      "id": "preset-2",
-      "name": "待定",
-      "author": "待定",
-      "modelUrl": "",
-      "license": {
-        "type": "待定（CC-BY 或作者明示允许再分发）",
-        "url": ""
-      },
-      "cubism": 4,
-      "status": "curating"
+      "status": "annotated"
     }
   ],
   "loadFromUrl": {
