@@ -23,6 +23,10 @@
     "assets"
   ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cyanfish-x/dsh-live2d-pets.git"
+  },
   "engines": {
     "node": "^22.19.0 || >=24.0.0"
   },
