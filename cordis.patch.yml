@@ -1,5 +1,9 @@
 # dsh-live2d-pets bundle patch: inserts the plugin row into the web roster.
 # 安装：`dsh plugin --profile web add dsh-live2d-pets`（官方 publish.md 流程）
+# 注意：config.model 当前为开发期测试 URL（Hiyori），预设模型定稿后改为预设 id。
 - insert:
     - id: live2d-pet
       name: dsh-live2d-pets
+      config:
+        model: https://cdn.jsdelivr.net/gh/Live2D/CubismWebSamples@develop/Samples/Resources/Hiyori/Hiyori.model3.json
+        debug: true
