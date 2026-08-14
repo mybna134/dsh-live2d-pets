@@ -2,6 +2,10 @@
 node_modules/
 .npm-cache/
 
+# bun 沙盒安装临时目录（AGENTS.md 工程约定）
+.bun-tmp/
+.bun-home/
+
 # Build output
 lib/
 *.tgz
