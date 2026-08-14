@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "note": "预设模型清单。硬约束：模型必须允许「再分发 + 商用」；须为 Cubism 4 兼容（ADR-003）。每个预设的许可文本需逐一核实后填写 license.url（spec §6）。",
+  "presets": [
+    {
+      "id": "preset-1",
+      "name": "待定",
+      "author": "待定",
+      "modelUrl": "",
+      "license": {
+        "type": "待定（CC-BY 或作者明示允许再分发）",
+        "url": ""
+      },
+      "cubism": 4,
+      "status": "curating"
+    },
+    {
+      "id": "preset-2",
+      "name": "待定",
+      "author": "待定",
+      "modelUrl": "",
+      "license": {
+        "type": "待定（CC-BY 或作者明示允许再分发）",
+        "url": ""
+      },
+      "cubism": 4,
+      "status": "curating"
+    }
+  ],
+  "loadFromUrl": {
+    "supported": true,
+    "note": "用户可在设置中输入任意 .model3.json URL 加载自备模型（零许可风险路径，spec §6）"
+  }
+}
