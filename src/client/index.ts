@@ -5,9 +5,10 @@
  * - `shell.overlay` 注册零尺寸锚点（生命周期/设置锚点）
  * - 视觉层用 Popover API（top layer，零 z-index）渲染，旧浏览器回退 body + 最大 z-index
  * - 运行时脚本与预设模型走 Host 同源路由（/pet-assets/*），无 CDN 依赖
- * - agent 状态经 /api/live2d-pet/state 轮询（800ms，标签页隐藏暂停）
+ * - agent 状态经 /api/live2d-pet/events SSE 推送（首帧快照 + 变更推送，ADR-006）；
+ *   标签页隐藏/窗口失焦暂停渲染循环，恢复时继续（spec §7）
  * - 点击/拖动按 6px 阈值判定；自由位置拖动，松手持久化（spec §4）
- * - 配置（enabled/size/debug/model）经轮询运行时应用：开关→显隐+停启渲染、
+ * - 配置（enabled/size/debug/model）经状态推送运行时应用：开关→显隐+停启渲染、
  *   尺寸→重设画布与模型适配、调试→动态面板、模型→按 modelUrl 重载（spec §2/§6/§7）
  * @module dsh-live2d-pets/client
  */
@@ -20,8 +21,6 @@ import { PetSettingsSection } from './settings.ts'
 /** 注入所需服务。 */
 export const inject = ['slots']
 
-/** 状态轮询间隔（ms）。 */
-const POLL_MS = 800
 /** 点击/拖动判定阈值（px）。 */
 const DRAG_THRESHOLD = 6
 /** 交互气泡冷却（ms）。 */
@@ -108,6 +107,20 @@ async function readJson<T>(res: Response): Promise<T> {
 
 const api = {
   state: (): Promise<PetStateView> => fetch(`${PET_API}/state`).then((res) => readJson<PetStateView>(res)),
+  /** SSE 状态订阅（ADR-006）：每次推送回调最新快照；断线由 EventSource
+   *  自动重连（服务端 retry 3s），重连后首帧即全量快照。返回退订函数。 */
+  events: (onState: (view: PetStateView) => void, onError: () => void): (() => void) => {
+    const es = new EventSource(`${PET_API}/events`)
+    es.onmessage = (ev: MessageEvent<string>) => {
+      try {
+        onState(JSON.parse(ev.data) as PetStateView)
+      } catch {
+        // 忽略坏帧，等待下一条
+      }
+    }
+    es.onerror = onError
+    return () => es.close()
+  },
   setDisplay: (patch: { right?: number; bottom?: number }): Promise<{ ok: boolean }> =>
     fetch(`${PET_API}/set-display`, {
       method: 'POST',
@@ -148,7 +161,7 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
   const pushCleanup = (fn: () => void) => { cleanup.push(fn) }
 
   // 卸载守卫：置位后 boot 的异步流程在每个 await 点提前退出，
-  // 避免 StrictMode 双挂载 / HMR 重挂载时残留第二份 PIXI app、轮询与脚本注入。
+  // 避免 StrictMode 双挂载 / HMR 重挂载时残留第二份 PIXI app、SSE 订阅与脚本注入。
   let disposed = false
   pushCleanup(() => { disposed = true })
 
@@ -180,6 +193,17 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
   let demoState: PetState | null = null
   let view: PetStateView | null = null
   let pos: DisplayLike = { right: 24, bottom: 20, size: 160 }
+  // 渲染开关：插件 enabled（配置）与页面可见性（spec §7）共同决定 ticker 是否运行
+  let enabled = true
+  let hidden = document.visibilityState !== 'visible'
+
+  /** 合并 enabled/隐藏/失焦状态，启停渲染循环（spec §7：暂停渲染保留最后画面）。 */
+  function syncTicker(): void {
+    if (!app) return
+    const shouldRun = enabled && !hidden
+    if (shouldRun) { try { app.ticker.start() } catch { /* 已启动 */ } }
+    else { try { app.ticker.stop() } catch { /* 已停止 */ } }
+  }
 
   function showBubble(text: string): void {
     if (!bubble) return
@@ -207,8 +231,8 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
     const state = demoState ?? next?.state ?? 'idle'
     // 状态变化时播状态气泡与状态动作（spec §3，气泡走冷却防刷屏）。
     // 动作只在状态变化时触发一次——pixi-live2d-display 的 motion() 每次
-    // 调用都会 stopAllMotions 从头播放,若随 800ms 轮询无条件重放,
-    // 待机动画永远播不满一个循环、互动动作也会在下一轮询被掐断。
+    // 调用都会 stopAllMotions 从头播放,若随状态推送无条件重放,
+    // 待机动画永远播不满一个循环、互动动作也会在下次推送被掐断。
     if (state !== lastState) {
       lastState = state
       const lines = STATE_BUBBLES[state]
@@ -350,12 +374,10 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
   /** 运行时应用配置变化（spec §2/§6/§7）：开关 / 尺寸 / 调试 / 模型。 */
   function applyConfig(next: PetStateView): void {
     const cfg = next.config
-    // 开关：显示/隐藏 + 暂停/恢复渲染循环（隐藏近似零开销）
+    // 开关：显示/隐藏 + 暂停/恢复渲染循环（syncTicker 合并隐藏/失焦状态，spec §7）
     if (box) box.style.display = cfg.enabled ? '' : 'none'
-    if (app) {
-      if (cfg.enabled) { try { app.ticker.start() } catch { /* 已启动 */ } }
-      else { try { app.ticker.stop() } catch { /* 已停止 */ } }
-    }
+    enabled = cfg.enabled
+    syncTicker()
     // 调试面板
     ensureDebugPanel(cfg.debug)
     // 尺寸：重设画布 + 模型适配
@@ -368,7 +390,8 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
         try { app.renderer.resize(canvas.width, canvas.height) } catch { /* 旧渲染器 */ }
         fitModel(nextSize)
       }
-    }    // 模型：modelUrl 变化 → 重载
+    }
+    // 模型：modelUrl 变化 → 重载
     const nextUrl = cfg.modelUrl || null
     if (nextUrl !== currentModelUrl) {
       currentModelUrl = nextUrl
@@ -487,35 +510,37 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
       await loadModelLayer(initialUrl)
       if (disposed) return
 
-      // 5. 状态轮询（visibility-aware；同时把配置变化运行时应用到宠物）
-      let interval: number | undefined
-      const stopPoll = () => { if (interval !== undefined) { window.clearInterval(interval); interval = undefined } }
-      const startPoll = () => {
-        if (interval !== undefined) return
-        interval = window.setInterval(async () => {
-          if (disposed) return
-          try {
-            const next = await api.state()
-            view = next
-            // 位置取持久化值；渲染尺寸保持现状，由 applyConfig 负责 diff 与更新
-            pos = { right: next.display.right, bottom: next.display.bottom, size: pos.size }
-            applyConfig(next)
-            applyState(next)
-          } catch { /* 下次轮询重试 */ }
-        }, POLL_MS)
+      // 5. 状态订阅（SSE 推送，ADR-006）：替代 v0.1 的 800ms 轮询。
+      //    断线由 EventSource 自动重连，重连后首帧即全量快照，无需补偿拉取。
+      const handleState = (next: PetStateView): void => {
+        if (disposed) return
+        view = next
+        // 位置取持久化值；渲染尺寸保持现状，由 applyConfig 负责 diff 与更新
+        pos = { right: next.display.right, bottom: next.display.bottom, size: pos.size }
+        applyConfig(next)
+        applyState(next)
       }
-      const onVisibility = () => {
-        if (document.visibilityState === 'visible') startPoll()
-        else stopPoll()
+      let closeEvents: (() => void) | undefined
+      try {
+        closeEvents = api.events(handleState, () => { /* 断线重连中，EventSource 自动重试 */ })
+      } catch {
+        // EventSource 不可用：保留首帧快照（静态宠物），不再更新
       }
-      startPoll()
+      // 标签页隐藏/窗口失焦 → 暂停渲染循环；恢复时继续（spec §7）
+      const onVisibility = () => { hidden = document.visibilityState !== 'visible'; syncTicker() }
+      const onBlur = () => { hidden = true; syncTicker() }
+      const onFocus = () => { hidden = false; syncTicker() }
       document.addEventListener('visibilitychange', onVisibility)
+      window.addEventListener('blur', onBlur)
+      window.addEventListener('focus', onFocus)
       pushCleanup(() => {
-        stopPoll()
+        closeEvents?.()
         document.removeEventListener('visibilitychange', onVisibility)
+        window.removeEventListener('blur', onBlur)
+        window.removeEventListener('focus', onFocus)
       })
 
-      // 6. 初始应用（含开关/尺寸/调试/模型）
+      // 6. 初始应用（含开关/尺寸/调试/模型；SSE 首帧到达前先用已拉到的快照）
       if (view) {
         applyConfig(view)
         applyState(view)
