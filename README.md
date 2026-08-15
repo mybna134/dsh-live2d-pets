@@ -54,7 +54,7 @@ dsh web
 
 | 层次 | 位置 | 说明 |
 |------|------|------|
-| **设置面板（推荐）** | DSH 设置 →「桌宠配置」 | 开关 / 尺寸 / 人设 / 模型列表 / 调试；写入 `~/.dsh/settings.yaml` 用户层，**立即生效** |
+| **设置面板（推荐）** | DSH 设置 →「桌宠配置」 | 开关 / 尺寸 / 渲染帧率 / 人设 / 模型列表 / 调试；写入 `~/.dsh/settings.yaml` 用户层，**立即生效** |
 | **base 层** | web profile 的 patch（未设置 `$DSH_HOME` 时为 `~/.dsh/profiles/web/cordis.patch.yml`） | 按 id 覆盖插件配置作为 base；**未在用户层覆盖的字段**生效——patch 整体替换 `config`，未改字段也要一并重述 |
 
 ```yaml
@@ -63,6 +63,7 @@ dsh web
   config:
     enabled: true # 总开关
     size: 160     # 宠物尺寸（px），范围 40–400
+    maxFps: 30    # 渲染帧率：30 / 60 / 0（不限制）
     model: hiyori # 模型：内置预设 id、自定义模型 id，或 .model3.json URL
     persona: tsundere # 人设 id（内置或自定义）
     debug: false  # 调试面板（开发用）

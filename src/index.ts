@@ -30,11 +30,16 @@ export const SETTINGS_NAMESPACE = 'live2d-pet'
 /** 品牌化 namespace（dsh-settings 类型约束）。 */
 const NS = settingsNamespace(SETTINGS_NAMESPACE)
 
+/** 渲染帧率档（spec §2/§7）：30 / 60 / 0（不限制，对应 PIXI maxFPS=0）。 */
+export type MaxFpsOption = 30 | 60 | 0
+
 export interface Config {
   /** 插件总开关。 */
   enabled: boolean
   /** 宠物尺寸（px，滑杆 40–400）。 */
   size: number
+  /** 渲染帧率上限（30 / 60 / 0=不限制；默认 30）。 */
+  maxFps: MaxFpsOption
   /** 选中模型：内置 preset id 或自定义模型 id（也兼容直接 URL）。 */
   model: string
   /** 调试模式：显示调试面板（开发用）。 */
@@ -48,6 +53,11 @@ export interface Config {
 export const Config: Schema<Config> = Schema.object({
   enabled: Schema.boolean().default(true),
   size: Schema.number().min(40).max(400).default(160),
+  maxFps: Schema.union([
+    Schema.const(30),
+    Schema.const(60),
+    Schema.const(0),
+  ]).default(30),
   model: Schema.string().default('hiyori'),
   debug: Schema.boolean().default(false),
   customModels: Schema.array(

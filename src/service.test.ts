@@ -6,7 +6,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { PetService } from './service.ts'
 import type { Config } from './index.ts'
 
-const BASE_CONFIG: Config = { enabled: true, size: 160, model: 'hiyori', debug: false, customModels: [], persona: 'tsundere' }
+const BASE_CONFIG: Config = { enabled: true, size: 160, maxFps: 30, model: 'hiyori', debug: false, customModels: [], persona: 'tsundere' }
 
 function makeHarness(overrides: Partial<Config> = {}) {
   const handlers = new Map<string, Array<(payload?: unknown, next?: () => void) => unknown>>()
@@ -48,6 +48,7 @@ describe('PetService 状态机', () => {
     expect(view.state).toBe('idle')
     expect(view.agent).toBe('idle')
     expect(view.version).toBe(0)
+    expect(view.config.maxFps).toBe(30)
   })
 
   it('agent running → thinking，idle → idle', () => {

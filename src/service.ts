@@ -30,6 +30,8 @@ export interface PetStateView {
   config: {
     enabled: boolean
     size: number
+    /** 渲染帧率上限（30 / 60 / 0=不限制；spec §2/§7）。 */
+    maxFps: number
     model: string
     /** 解析后的 .model3.json URL（模型 id → URL，spec §6）。 */
     modelUrl: string | null
@@ -125,6 +127,7 @@ export class PetService {
       config: {
         enabled: config.enabled,
         size: config.size,
+        maxFps: config.maxFps,
         model: config.model,
         modelUrl: resolveModelUrl(config.model, config.customModels),
         debug: config.debug,

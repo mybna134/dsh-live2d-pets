@@ -1,6 +1,6 @@
 /**
  * 桌宠配置设置页（`settings.section` 注册体，spec §2）。
- * 四项设置：开关 / 尺寸滑杆 / 模型列表（内置只读 + 自定义增删改）/ 调试模式。
+ * 六项设置：开关 / 尺寸滑杆 / 渲染帧率 / 人设 / 模型列表（内置只读 + 自定义增删改）/ 调试模式。
  * 读写经插件自己的同源 API `/api/live2d-pet/settings`（Host 直连 ctx.settings，
  * 持久化到 settings.yaml 用户层）——不走 client settingsScope wire，因为
  * dsh-host-apiproxy 只把内置 allowlist 的 namespace 暴露给浏览器
@@ -21,6 +21,8 @@ import { builtinPersonaOptions } from './personas.ts'
 export interface PetSettingsValue {
   enabled: boolean
   size: number
+  /** 渲染帧率：30 / 60 / 0（不限制）。 */
+  maxFps: number
   model: string
   debug: boolean
   customModels: CustomModelEntry[]
@@ -41,6 +43,7 @@ interface SettingsState {
 const DEFAULT_VALUE: PetSettingsValue = {
   enabled: true,
   size: 160,
+  maxFps: 30,
   model: 'hiyori',
   debug: false,
   customModels: [],
@@ -109,11 +112,130 @@ interface ThemeSelectOption {
   name: string
 }
 
+const MAX_FPS_OPTIONS: ThemeSelectOption[] = [
+  { id: '30', name: '30' },
+  { id: '60', name: '60' },
+  { id: '0', name: '不限制帧率' },
+]
+
+/** 归一化设置里的帧率档（非法值回落默认 30）。 */
+function normalizeMaxFps(raw: unknown): number {
+  if (raw === 60 || raw === 0) return raw
+  return 30
+}
+
 interface ThemeSelectProps {
   value: string
   options: ThemeSelectOption[]
   disabled?: boolean
   onChange: (id: string) => void
+}
+
+interface ThemeRadioGroupProps {
+  value: string
+  options: ThemeSelectOption[]
+  disabled?: boolean
+  name: string
+  onChange: (id: string) => void
+}
+
+/** 选中态强调色（与设置页其它高亮一致，贴近系统 radio 蓝点观感）。 */
+const RADIO_ACCENT = 'rgba(90,150,255,.95)'
+const RADIO_RING = 'rgba(160,160,170,.75)'
+
+/** 自绘圆点：帧率档与模型列表共用，避免原生 radio 深色主题白框。 */
+function ThemeRadioDot(props: { selected: boolean }): ReactElement {
+  const { selected } = props
+  return createElement('span', {
+    'aria-hidden': true,
+    style: {
+      width: 14,
+      height: 14,
+      borderRadius: '50%',
+      boxSizing: 'border-box',
+      border: `1.5px solid ${selected ? RADIO_ACCENT : RADIO_RING}`,
+      background: 'transparent',
+      display: 'inline-flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      flexShrink: 0,
+    },
+  },
+    selected
+      ? createElement('span', {
+        style: {
+          width: 6,
+          height: 6,
+          borderRadius: '50%',
+          background: RADIO_ACCENT,
+        },
+      })
+      : null,
+  )
+}
+
+interface ThemeRadioOptionProps {
+  selected: boolean
+  disabled?: boolean
+  onSelect: () => void
+  children: ReactNode
+  style?: CSSProperties
+}
+
+/** 可点的圆点 + 文案行（帧率横排 / 模型行复用）。 */
+function ThemeRadioOption(props: ThemeRadioOptionProps): ReactElement {
+  const { selected, disabled, onSelect, children, style } = props
+  return createElement('button', {
+    type: 'button',
+    role: 'radio',
+    'aria-checked': selected,
+    disabled: !!disabled,
+    onClick: () => { if (!disabled && !selected) onSelect() },
+    style: {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 8,
+      margin: 0,
+      padding: 0,
+      border: 'none',
+      background: 'transparent',
+      color: 'inherit',
+      font: 'inherit',
+      fontSize: 13,
+      cursor: disabled ? 'not-allowed' : 'pointer',
+      outline: 'none',
+      minWidth: 0,
+      ...style,
+    },
+  },
+    createElement(ThemeRadioDot, { selected }),
+    children,
+  )
+}
+
+/**
+ * 自绘圆形单选组：一行多档；圆点走 ThemeRadioDot。
+ */
+function ThemeRadioGroup(props: ThemeRadioGroupProps): ReactElement {
+  const { value, options, disabled, name, onChange } = props
+  return createElement('div', {
+    role: 'radiogroup',
+    'aria-label': name,
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      alignItems: 'center',
+      gap: '10px 18px',
+      opacity: disabled ? 0.55 : 1,
+    },
+  },
+    options.map((o) => createElement(ThemeRadioOption, {
+      key: o.id,
+      selected: o.id === value,
+      disabled,
+      onSelect: () => onChange(o.id),
+    }, createElement('span', null, o.name))),
+  )
 }
 
 /**
@@ -252,7 +374,7 @@ async function writeSettings(ops: SettingsOp[]): Promise<SettingsView | null> {
   }
 }
 
-/** 单个模型行（radio 选择 + 元信息 + 右侧操作）。 */
+/** 单个模型行（自绘 radio + 元信息 + 右侧操作；圆点与帧率档共用 ThemeRadioDot）。 */
 function modelRow(
   key: string,
   selected: boolean,
@@ -263,15 +385,15 @@ function modelRow(
   licenseLink?: ReactNode,
 ): ReactElement {
   return createElement('div', { key, style: { ...rowStyle, display: 'flex', alignItems: 'center', gap: 8 } },
-    createElement('label', { style: { ...labelStyle, margin: 0 } },
-      createElement('input', {
-        type: 'radio',
-        name: 'pet-model',
-        checked: selected,
-        disabled,
-        onChange: onSelect,
-      }),
-      createElement('span', { style: { flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, meta),
+    createElement(ThemeRadioOption, {
+      selected,
+      disabled,
+      onSelect,
+      style: { ...labelStyle, margin: 0, flex: 1 },
+    },
+      createElement('span', {
+        style: { flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'left' },
+      }, meta),
     ),
     licenseLink,
     actions,
@@ -551,57 +673,80 @@ export function PetSettingsSection(props: PetSettingsProps): ReactNode {
     ),
   ))
 
-  // 3. 人设（spec §2/§3）：下拉切换（全部台词即时换语气）+ 文件工具行
+  // 3. 渲染帧率（spec §2/§7）：尺寸下方 group，自绘圆形单选立刻生效
+  const maxFps = normalizeMaxFps(value.maxFps)
+  children.push(createElement('div', { key: 'maxFps' },
+    createElement('div', { style: sectionTitleStyle }, '渲染帧率'),
+    createElement('div', { style: rowStyle },
+      createElement(ThemeRadioGroup, {
+        name: '渲染帧率',
+        value: String(maxFps),
+        options: MAX_FPS_OPTIONS,
+        disabled: !writable,
+        onChange: (id: string) => {
+          enqueueWrite(() => [{ op: 'set', path: ['maxFps'], value: normalizeMaxFps(Number(id)) }])
+        },
+      }),
+    ),
+  ))
+
+  // 4. 人设（spec §2/§3）：独立分组标题 + 下拉/工具行
   const personaOptions = [
     ...builtinPersonaList,
     ...customPersonaList.map((p) => ({ id: p.id, name: p.name ?? p.id })),
   ]
-  children.push(createElement('div', { key: 'persona', style: rowStyle },
-    createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: personaNotice || personaState?.personasError ? 6 : 0 } },
-      createElement('span', { style: { whiteSpace: 'nowrap' } }, '人设'),
-      createElement(ThemeSelect, {
-        value: activePersona,
-        options: personaOptions,
-        disabled: !writable,
-        onChange: (id: string) => {
-          enqueueWrite(() => [{ op: 'set', path: ['persona'], value: id }])
-        },
-      }),
-      createElement('button', { style: buttonStyle, onClick: reloadPersonas }, '↻ 重新读取'),
-      createElement('button', { style: buttonStyle, onClick: openPersonasFile }, '自定义人设 ↗'),
-    ),
-    (personaState?.personasError || personaNotice) && createElement('div', {
-      key: 'persona-notice',
-      style: { color: personaState?.personasError ? '#b45309' : '#888', fontSize: 12 },
-    },
-      (personaState?.personasError ? `人设文件：${personaState.personasError}` : null) ?? personaNotice,
-    ),
-    showPersonaPopover && createElement('div', {
-      key: 'persona-popover',
-      style: { marginTop: 8, padding: '8px 10px', borderRadius: 8, background: 'rgba(128,128,128,.12)', fontSize: 12, wordBreak: 'break-all' },
-    },
-      createElement('div', null, '无法直接打开，请手动编辑人设文件：'),
-      createElement('div', { style: { margin: '4px 0', color: '#666' } }, personaState?.personasFile ?? ''),
-      createElement('div', { style: { display: 'flex', gap: 6 } },
-        createElement('button', {
-          style: buttonStyle,
-          onClick: () => { void copyText(personaState?.personasFile ?? '').then((ok) => setPersonaNotice(ok ? '已复制文件路径' : '复制失败')) },
-        }, '复制路径'),
-        createElement('button', {
-          style: buttonStyle,
-          onClick: () => { void copyText(PERSONAS_TEMPLATE).then((ok) => setPersonaNotice(ok ? '已复制人设模板（女仆示例）' : '复制失败')) },
-        }, '复制模板'),
-        createElement('button', { style: buttonStyle, onClick: () => setShowPersonaPopover(false) }, '收起'),
+  children.push(createElement('div', { key: 'persona' },
+    createElement('div', { style: sectionTitleStyle }, '人设台词'),
+    createElement('div', { style: rowStyle },
+      createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: personaNotice || personaState?.personasError ? 6 : 0 } },
+        createElement(ThemeSelect, {
+          value: activePersona,
+          options: personaOptions,
+          disabled: !writable,
+          onChange: (id: string) => {
+            enqueueWrite(() => [{ op: 'set', path: ['persona'], value: id }])
+          },
+        }),
+        createElement('button', { style: buttonStyle, onClick: reloadPersonas }, '↻ 重新读取'),
+        createElement('button', { style: buttonStyle, onClick: openPersonasFile }, '自定义人设 ↗'),
+      ),
+      (personaState?.personasError || personaNotice) && createElement('div', {
+        key: 'persona-notice',
+        style: { color: personaState?.personasError ? '#b45309' : '#888', fontSize: 12 },
+      },
+        (personaState?.personasError ? `人设文件：${personaState.personasError}` : null) ?? personaNotice,
+      ),
+      showPersonaPopover && createElement('div', {
+        key: 'persona-popover',
+        style: { marginTop: 8, padding: '8px 10px', borderRadius: 8, background: 'rgba(128,128,128,.12)', fontSize: 12, wordBreak: 'break-all' },
+      },
+        createElement('div', null, '无法直接打开，请手动编辑人设文件：'),
+        createElement('div', { style: { margin: '4px 0', color: '#666' } }, personaState?.personasFile ?? ''),
+        createElement('div', { style: { display: 'flex', gap: 6 } },
+          createElement('button', {
+            style: buttonStyle,
+            onClick: () => { void copyText(personaState?.personasFile ?? '').then((ok) => setPersonaNotice(ok ? '已复制文件路径' : '复制失败')) },
+          }, '复制路径'),
+          createElement('button', {
+            style: buttonStyle,
+            onClick: () => { void copyText(PERSONAS_TEMPLATE).then((ok) => setPersonaNotice(ok ? '已复制人设模板（女仆示例）' : '复制失败')) },
+          }, '复制模板'),
+          createElement('button', { style: buttonStyle, onClick: () => setShowPersonaPopover(false) }, '收起'),
+        ),
       ),
     ),
   ))
 
-  // 4. 模型列表
+  // 5. 模型列表（自绘 radio，与帧率档共用 ThemeRadioDot）
   children.push(createElement('div', { key: 'models' },
     createElement('div', { style: sectionTitleStyle }, '内置模型（只读）'),
-    builtinRows.length > 0 ? builtinRows : createElement('div', { style: { color: '#888', fontSize: 12 } }, '清单加载中…'),
+    createElement('div', { role: 'radiogroup', 'aria-label': '内置模型' },
+      builtinRows.length > 0 ? builtinRows : createElement('div', { style: { color: '#888', fontSize: 12 } }, '清单加载中…'),
+    ),
     createElement('div', { style: sectionTitleStyle }, '我的模型'),
-    customRows.length > 0 ? customRows : createElement('div', { style: { color: '#888', fontSize: 12, marginBottom: 8 } }, '尚未添加自定义模型'),
+    createElement('div', { role: 'radiogroup', 'aria-label': '我的模型' },
+      customRows.length > 0 ? customRows : createElement('div', { style: { color: '#888', fontSize: 12, marginBottom: 8 } }, '尚未添加自定义模型'),
+    ),
     createElement('div', { style: { display: 'flex', gap: 6, alignItems: 'center' } },
       createElement('input', {
         style: inputStyle,
@@ -621,7 +766,7 @@ export function PetSettingsSection(props: PetSettingsProps): ReactNode {
     ),
   ))
 
-  // 5. 调试模式（与上方模型添加区留出间距）
+  // 6. 调试模式（与上方模型添加区留出间距）
   children.push(createElement('div', { key: 'debug', style: { ...rowStyle, marginTop: 12 } },
     createElement('label', { style: labelStyle },
       createElement('input', {

@@ -8,8 +8,8 @@
  * - agent 状态经 /api/live2d-pet/events SSE 推送（首帧快照 + 变更推送，ADR-006）；
  *   标签页隐藏/窗口失焦暂停渲染循环，恢复时继续（spec §7）
  * - 点击/拖动按 6px 阈值判定；自由位置拖动，松手持久化（spec §4）
- * - 配置（enabled/size/debug/model）经状态推送运行时应用：开关→显隐+停启渲染、
- *   尺寸→重设画布与模型适配、调试→动态面板、模型→按 modelUrl 重载（spec §2/§6/§7）
+ * - 配置（enabled/size/maxFps/debug/model）经状态推送运行时应用：开关→显隐+停启渲染、
+ *   尺寸→重设画布与模型适配、帧率→ticker.maxFPS、调试→动态面板、模型→按 modelUrl 重载（spec §2/§6/§7）
  * @module dsh-live2d-pets/client
  */
 
@@ -33,10 +33,16 @@ const BUBBLE_COOLDOWN_MS = 2000
 /** 瞬态气泡显示时长（ms）：到时自动隐藏。 */
 const BUBBLE_DISPLAY_MS = 2500
 /**
- * 渲染帧率上限（spec §7）：未封顶时 PIXI ticker 可达 120–140fps，
- * 长时间挂页会持续占满 GPU/主线程；桌宠动画 30fps 足够。
+ * 默认渲染帧率上限（spec §2/§7）：未封顶时 PIXI ticker 可达 120–140fps，
+ * 长时间挂页会持续占满 GPU/主线程；桌宠动画默认 30fps 足够，用户可在设置中改档。
  */
-const PET_MAX_FPS = 30
+const DEFAULT_MAX_FPS = 30
+
+/** 归一化配置帧率档（非法值回落默认 30）。 */
+function normalizeMaxFps(raw: unknown): number {
+  if (raw === 60 || raw === 0) return raw
+  return DEFAULT_MAX_FPS
+}
 /**
  * 阶段演进气泡（spec §3）：思考/等审批为长状态（可达数十秒以上），气泡与
  * 状态同生命周期**常驻**，文案按入态后耗时推进（afterMs 为距入态偏移），
@@ -273,6 +279,8 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
   let demoState: PetState | null = null
   let view: PetStateView | null = null
   let pos: DisplayLike = { right: 24, bottom: 20, size: 160 }
+  // 帧率档（settings maxFps → ticker.maxFPS；0 = 不限制）
+  let maxFps = DEFAULT_MAX_FPS
   // 渲染开关：插件 enabled（配置）与页面可见性（spec §7）共同决定 ticker 是否运行
   let enabled = true
   let hidden = document.visibilityState !== 'visible'
@@ -288,6 +296,13 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
     const shouldRun = enabled && !hidden
     if (shouldRun) { try { app.ticker.start() } catch { /* 已启动 */ } }
     else { try { app.ticker.stop() } catch { /* 已停止 */ } }
+  }
+
+  /** 应用渲染帧率上限（spec §2/§7；0 = PIXI 不设上限）。 */
+  function applyMaxFps(next: number): void {
+    maxFps = normalizeMaxFps(next)
+    if (!app?.ticker) return
+    try { app.ticker.maxFPS = maxFps } catch { /* 旧 ticker */ }
   }
 
   function clearBubbleHideTimer(): void {
@@ -513,7 +528,7 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
         antialias: false,
         powerPreference: 'low-power',
       })
-      try { app.ticker.maxFPS = PET_MAX_FPS } catch { /* 旧 ticker */ }
+      try { app.ticker.maxFPS = maxFps } catch { /* 旧 ticker */ }
       pushCleanup(() => { try { app?.destroy(true) } catch { /* 已销毁 */ } })
 
       const loaded = await M.from(url, { autoInteract: false }) as ModelLike
@@ -575,7 +590,7 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
     }
   }
 
-  /** 运行时应用配置变化（spec §2/§6/§7）：开关 / 尺寸 / 调试 / 模型。 */
+  /** 运行时应用配置变化（spec §2/§6/§7）：开关 / 尺寸 / 帧率 / 调试 / 模型。 */
   function applyConfig(next: PetStateView): void {
     const cfg = next.config
     // 开关：显示/隐藏 + 暂停/恢复渲染循环（syncTicker 合并隐藏/失焦状态，spec §7）
@@ -584,6 +599,8 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
     syncTicker()
     // 调试面板
     ensureDebugPanel(cfg.debug)
+    // 帧率：立刻改 ticker.maxFPS（0 = 不限制）
+    applyMaxFps(cfg.maxFps)
     // 尺寸：合并后重设画布 + 模型适配（避免连发 SSE 同步卡死主线程）
     const nextSize = cfg.size
     if (nextSize !== pos.size) scheduleSize(nextSize)
