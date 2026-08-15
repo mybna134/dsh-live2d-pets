@@ -22,6 +22,7 @@ import { installPetSettingsNavIcon, pawNavIcon } from './paw-icon.ts'
 import { resolvePersonaCopy, BUILTIN_PERSONAS } from './personas.ts'
 import type { CopyTable } from '../persona-shared.ts'
 import { DEFAULT_PERSONA_ID } from '../persona-shared.ts'
+import { DEFAULT_SPATIAL_TAP, type SpatialTapConfig } from '../models.ts'
 
 /** 注入所需服务。 */
 export const inject = ['slots']
@@ -132,6 +133,8 @@ interface ModelLike {
   motion(name: string): unknown
   /** pixi-live2d-display 真实签名：hitTest(x, y) 返回**命中的区域名数组**（spec §4）。 */
   hitTest(x: number, y: number): string[]
+  /** 模型在舞台/画布坐标下的包围盒（空间分档回退用）。 */
+  getBounds?: () => { x: number; y: number; width: number; height: number }
   internalModel?: { hitAreas?: Record<string, unknown> }
 }
 
@@ -154,15 +157,65 @@ const TAP_PART_MOTIONS: Record<TapPart, string[]> = {
 }
 
 /**
- * 按优先级（头 > 腿 > 手 > 身体）把命中区域名列表归类到一个部位；
- * 空列表（点击落在所有命中区域之外）返回 null 不响应。
+ * 按命中区域名优先级归类（头 > 腿 > 手 > 身体）；空列表返回 null。
  */
-function classifyTap(hits: readonly string[]): TapPart | null {
+function classifyTapByName(hits: readonly string[]): TapPart | null {
   if (hits.length === 0) return null
   for (const { part, re } of TAP_PART_MATCHERS) {
     if (hits.some((name) => re.test(name))) return part
   }
   return 'body'
+}
+
+/**
+ * 按点击在模型包围盒内的相对位置分档（spec §4：HitArea 不足时的空间回退）。
+ * 五个矩形：头 / 身 / 腿（居中列）+ 左臂 / 右臂（侧列）；不落在任一矩形 → null。
+ */
+function classifyTapByPosition(
+  localX: number,
+  localY: number,
+  bounds: { x: number; y: number; width: number; height: number },
+  tap: SpatialTapConfig,
+): TapPart | null {
+  if (!(bounds.width > 0 && bounds.height > 0)) return null
+  const nx = (localX - bounds.x) / bounds.width
+  const ny = (localY - bounds.y) / bounds.height
+  if (nx < 0 || nx > 1 || ny < 0 || ny > 1) return null
+  if (ny < tap.headMaxNy && nx >= tap.headMinNx && nx <= tap.headMaxNx) return 'head'
+  if (ny > tap.legMinNy && nx >= tap.bodyMinNx && nx <= tap.bodyMaxNx) return 'leg'
+  if (ny >= tap.armMinNy && ny <= tap.legMinNy) {
+    if (nx >= tap.armLeftMinNx && nx < tap.bodyMinNx) return 'arm'
+    if (nx > tap.bodyMaxNx && nx <= tap.armRightMaxNx) return 'arm'
+  }
+  if (
+    ny >= tap.headMaxNy
+    && ny <= tap.legMinNy
+    && nx >= tap.bodyMinNx
+    && nx <= tap.bodyMaxNx
+  ) return 'body'
+  return null
+}
+
+/**
+ * 综合命中名与空间回退（spec §4）：
+ * - 命中名为头/腿/手 → 直接采用
+ * - 空命中或仅身体/未识别名 → 盒内按相对位置分档；盒外不响应
+ */
+function classifyTap(
+  hits: readonly string[],
+  localX: number,
+  localY: number,
+  _hitAreaKeys: readonly string[],
+  bounds: { x: number; y: number; width: number; height: number } | null,
+  tap: SpatialTapConfig,
+): TapPart | null {
+  const named = classifyTapByName(hits)
+  if (named === 'head' || named === 'leg' || named === 'arm') return named
+  if (bounds) {
+    const spatial = classifyTapByPosition(localX, localY, bounds, tap)
+    if (spatial !== null) return spatial
+  }
+  return named
 }
 
 /** 从台词池随机取一句；可选避开上一条（池 ≥2 时，spec §4）。 */
@@ -245,11 +298,19 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
     if (sizeRaf) { window.cancelAnimationFrame(sizeRaf); sizeRaf = 0 }
     pendingSize = null
   })
+  pushCleanup(() => { stopZoneLoop(); showSpatialZones = false })
 
   let box: HTMLDivElement | null = null
   let bubble: HTMLDivElement | null = null
   let debugEl: HTMLDivElement | null = null
   let canvas: HTMLCanvasElement | null = null
+  /** 画布外包一层，便于绝对定位调试分区叠加层。 */
+  let petLayer: HTMLDivElement | null = null
+  let zoneOverlay: HTMLCanvasElement | null = null
+  let showSpatialZones = false
+  /** 当前模型生效的空间回退阈值（SSE config.spatialTap；默认 DEFAULT_SPATIAL_TAP）。 */
+  let spatialTap: SpatialTapConfig = { ...DEFAULT_SPATIAL_TAP }
+  let zoneRaf = 0
   let app: {
     destroy(remove?: boolean): void
     stage: { addChild(child: unknown): unknown }
@@ -495,14 +556,19 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
   function teardownLayer(): void {
     if (sizeRaf) { window.cancelAnimationFrame(sizeRaf); sizeRaf = 0 }
     pendingSize = null
+    stopZoneLoop()
     if (app) { try { app.destroy(true) } catch { /* 已销毁 */ } }
     app = null
     model = null
     hitAreas = []
     baseModelW = 0
     baseModelH = 0
+    if (zoneOverlay && zoneOverlay.parentNode) zoneOverlay.parentNode.removeChild(zoneOverlay)
+    zoneOverlay = null
     if (canvas && canvas.parentNode) canvas.parentNode.removeChild(canvas)
     canvas = null
+    if (petLayer && petLayer.parentNode) petLayer.parentNode.removeChild(petLayer)
+    petLayer = null
     removeFallback()
   }
 
@@ -515,12 +581,20 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
       return
     }
     try {
+      petLayer = document.createElement('div')
+      petLayer.style.cssText = 'position:relative;display:inline-block;pointer-events:none'
       canvas = document.createElement('canvas')
       const size = pos.size
       canvas.width = size
       canvas.height = Math.round(size * 1.2)
       canvas.style.cssText = 'pointer-events:auto;display:block'
-      box.appendChild(canvas)
+      zoneOverlay = document.createElement('canvas')
+      zoneOverlay.width = canvas.width
+      zoneOverlay.height = canvas.height
+      zoneOverlay.style.cssText = `position:absolute;left:0;top:0;width:${canvas.width}px;height:${canvas.height}px;pointer-events:none;z-index:2;display:${showSpatialZones ? 'block' : 'none'}`
+      petLayer.appendChild(canvas)
+      petLayer.appendChild(zoneOverlay)
+      box.appendChild(petLayer)
 
       const M = PIXI.live2d?.Live2DModel
       if (!M) throw new Error('Live2DModel 不可用')
@@ -554,6 +628,7 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
         try { app.ticker.addOnce(() => fitModel(pos.size)) } catch { /* 首帧适配 */ }
       }
       if (lastState) playState(lastState)
+      if (showSpatialZones) startZoneLoop()
 
       // 指针事件（新 canvas；点击/拖动 6px 阈值）
       canvas.addEventListener('pointerdown', handlePointerDown)
@@ -573,13 +648,85 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
     modelLoadQueue = modelLoadQueue.then(() => loadModelLayer(url)).catch(() => {})
   }
 
+  /** 停止空间分区分帧重绘。 */
+  function stopZoneLoop(): void {
+    if (zoneRaf) { window.cancelAnimationFrame(zoneRaf); zoneRaf = 0 }
+  }
+
+  /** 绘制空间回退四档色块（与 spatialTap / classifyTapByPosition 一致）。 */
+  function paintSpatialZones(): void {
+    if (!showSpatialZones || !zoneOverlay || !canvas || !model) return
+    const w = canvas.width
+    const h = canvas.height
+    if (!(w > 0 && h > 0)) return
+    if (zoneOverlay.width !== w) zoneOverlay.width = w
+    if (zoneOverlay.height !== h) zoneOverlay.height = h
+    zoneOverlay.style.cssText = `position:absolute;left:0;top:0;width:${w}px;height:${h}px;pointer-events:none;z-index:2;display:block`
+    const ctx = zoneOverlay.getContext('2d')
+    if (!ctx) return
+    ctx.clearRect(0, 0, w, h)
+    let bounds: { x: number; y: number; width: number; height: number } | null = null
+    try {
+      const b = model.getBounds?.()
+      if (b && b.width > 0 && b.height > 0) bounds = { x: b.x, y: b.y, width: b.width, height: b.height }
+    } catch { /* 无包围盒 */ }
+    if (!bounds) return
+    const { x: bx, y: by, width: bw, height: bh } = bounds
+    const fill = (color: string, x: number, y: number, rw: number, rh: number, label: string) => {
+      if (!(rw > 0 && rh > 0)) return
+      ctx.fillStyle = color
+      ctx.fillRect(x, y, rw, rh)
+      ctx.strokeStyle = 'rgba(255,255,255,.55)'
+      ctx.strokeRect(x + 0.5, y + 0.5, rw - 1, rh - 1)
+      ctx.fillStyle = 'rgba(255,255,255,.92)'
+      ctx.font = '11px ui-monospace,monospace'
+      ctx.fillText(label, x + 4, y + 14)
+    }
+    const rect = (minNx: number, maxNx: number, minNy: number, maxNy: number) => ({
+      x: bx + bw * minNx,
+      y: by + bh * minNy,
+      w: bw * (maxNx - minNx),
+      h: bh * (maxNy - minNy),
+    })
+    const head = rect(spatialTap.headMinNx, spatialTap.headMaxNx, 0, spatialTap.headMaxNy)
+    const body = rect(spatialTap.bodyMinNx, spatialTap.bodyMaxNx, spatialTap.headMaxNy, spatialTap.legMinNy)
+    const leg = rect(spatialTap.bodyMinNx, spatialTap.bodyMaxNx, spatialTap.legMinNy, 1)
+    const armL = rect(spatialTap.armLeftMinNx, spatialTap.bodyMinNx, spatialTap.armMinNy, spatialTap.legMinNy)
+    const armR = rect(spatialTap.bodyMaxNx, spatialTap.armRightMaxNx, spatialTap.armMinNy, spatialTap.legMinNy)
+    fill('rgba(80,200,120,.22)', body.x, body.y, body.w, body.h, 'body')
+    fill('rgba(80,160,255,.28)', head.x, head.y, head.w, head.h, 'head')
+    fill('rgba(255,160,60,.28)', leg.x, leg.y, leg.w, leg.h, 'leg')
+    fill('rgba(255,220,60,.32)', armL.x, armL.y, armL.w, armL.h, 'arm')
+    fill('rgba(255,220,60,.32)', armR.x, armR.y, armR.w, armR.h, 'arm')
+    ctx.strokeStyle = 'rgba(255,80,80,.85)'
+    ctx.lineWidth = 1.5
+    ctx.strokeRect(bx, by, bw, bh)
+  }
+
+  function startZoneLoop(): void {
+    stopZoneLoop()
+    if (!showSpatialZones) return
+    const tick = () => {
+      paintSpatialZones()
+      zoneRaf = window.requestAnimationFrame(tick)
+    }
+    zoneRaf = window.requestAnimationFrame(tick)
+  }
+
+  function setSpatialZonesVisible(on: boolean): void {
+    showSpatialZones = on
+    if (zoneOverlay) zoneOverlay.style.display = on ? 'block' : 'none'
+    if (on) startZoneLoop()
+    else stopZoneLoop()
+  }
+
   /** 调试面板动态开关（spec §2）。 */
   function ensureDebugPanel(show: boolean): void {
     if (show && !debugEl && box) {
       debugEl = document.createElement('div')
       debugEl.style.cssText = 'pointer-events:auto;margin-top:6px;padding:6px 8px;background:rgba(20,20,32,.9);color:#e8e8f0;border-radius:8px;font:11px/1.5 ui-monospace,monospace;white-space:pre-wrap;width:220px'
       const demoRow = document.createElement('div')
-      demoRow.style.cssText = 'margin-top:4px;display:flex;gap:4px'
+      demoRow.style.cssText = 'margin-top:4px;display:flex;gap:4px;flex-wrap:wrap'
       for (const st of ['idle', 'thinking', 'waiting', 'done', 'error'] as const) {
         const btn = document.createElement('button')
         btn.textContent = st
@@ -595,15 +742,18 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
     }
   }
 
-  /** 运行时应用配置变化（spec §2/§6/§7）：开关 / 尺寸 / 帧率 / 调试 / 模型。 */
+  /** 运行时应用配置变化（spec §2/§6/§7）：开关 / 尺寸 / 帧率 / 调试 / 分区 / 模型。 */
   function applyConfig(next: PetStateView): void {
     const cfg = next.config
     // 开关：显示/隐藏 + 暂停/恢复渲染循环（syncTicker 合并隐藏/失焦状态，spec §7）
     if (box) box.style.display = cfg.enabled ? '' : 'none'
     enabled = cfg.enabled
     syncTicker()
-    // 调试面板
+    // 调试面板 + 点击分区（开发者选项，互不强制绑定）
     ensureDebugPanel(cfg.debug)
+    setSpatialZonesVisible(!!cfg.showTapZones)
+    // 空间回退阈值：随当前模型解析结果热更新（自定义可覆盖；色块与分档共用）
+    if (cfg.spatialTap) spatialTap = { ...cfg.spatialTap }
     // 帧率：立刻改 ticker.maxFPS（0 = 不限制）
     applyMaxFps(cfg.maxFps)
     // 尺寸：合并后重设画布 + 模型适配（避免连发 SSE 同步卡死主线程）
@@ -660,9 +810,16 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
     lastTapAt = now
     try {
       const rect = canvas.getBoundingClientRect()
+      const localX = e.clientX - rect.left
+      const localY = e.clientY - rect.top
       // hitTest(x, y) 吃画布世界坐标（库内部做模型空间转换），返回命中的区域名数组
-      const hits = model.hitTest(e.clientX - rect.left, e.clientY - rect.top)
-      const part = classifyTap(hits)
+      const hits = model.hitTest(localX, localY)
+      let bounds: { x: number; y: number; width: number; height: number } | null = null
+      try {
+        const b = model.getBounds?.()
+        if (b && b.width > 0 && b.height > 0) bounds = { x: b.x, y: b.y, width: b.width, height: b.height }
+      } catch { /* 无包围盒则仅按命中名 */ }
+      const part = classifyTap(hits, localX, localY, hitAreas, bounds, spatialTap)
       if (part === null) return
       const poolKey = `tap${part[0].toUpperCase()}${part.slice(1)}` as 'tapHead' | 'tapLeg' | 'tapArm' | 'tapBody'
       const line = pickLine(activeCopy[poolKey], lastTapLine[poolKey])

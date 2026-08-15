@@ -18,8 +18,19 @@ import { PersonasStore } from './personas.ts'
 export { PetService } from './service.ts'
 export type { PetState, PetStateView } from './service.ts'
 export { makePetRoutes, petPackageRoot, PET_API_PREFIX, PET_ASSET_PREFIX } from './routes.ts'
-export { listBuiltinPresets, resolveModelUrl } from './models.ts'
-export type { BuiltinPreset, CustomModelEntry } from './models.ts'
+export {
+  listBuiltinPresets,
+  resolveModelUrl,
+  resolveSpatialTap,
+  mergeSpatialTap,
+  DEFAULT_SPATIAL_TAP,
+} from './models.ts'
+export type {
+  BuiltinPreset,
+  CustomModelEntry,
+  SpatialTapConfig,
+  SpatialTapOverride,
+} from './models.ts'
 
 /** 稳定 cordis 插件名（对应 cordis.patch.yml insert id）。 */
 export const name = 'live2d-pet'
@@ -44,6 +55,8 @@ export interface Config {
   model: string
   /** 调试模式：显示调试面板（开发用）。 */
   debug: boolean
+  /** 显示点击分区叠加层（空间回退色块，开发用）。 */
+  showTapZones: boolean
   /** 用户自定义模型（设置面板增删改，spec §2/§6）。 */
   customModels: CustomModelEntry[]
   /** 选中人设 id：内置（tsundere/genki/…）或自定义人设 id（spec §3）。 */
@@ -60,11 +73,23 @@ export const Config: Schema<Config> = Schema.object({
   ]).default(30),
   model: Schema.string().default('hiyori'),
   debug: Schema.boolean().default(false),
+  showTapZones: Schema.boolean().default(false),
   customModels: Schema.array(
     Schema.object({
       id: Schema.string(),
       name: Schema.string(),
       modelUrl: Schema.string(),
+      spatialTap: Schema.object({
+        headMaxNy: Schema.number().min(0).max(1),
+        legMinNy: Schema.number().min(0).max(1),
+        armMinNy: Schema.number().min(0).max(1),
+        headMinNx: Schema.number().min(0).max(1),
+        headMaxNx: Schema.number().min(0).max(1),
+        bodyMinNx: Schema.number().min(0).max(1),
+        bodyMaxNx: Schema.number().min(0).max(1),
+        armLeftMinNx: Schema.number().min(0).max(1),
+        armRightMaxNx: Schema.number().min(0).max(1),
+      }),
     }),
   ).default([]),
   persona: Schema.string().default('tsundere'),

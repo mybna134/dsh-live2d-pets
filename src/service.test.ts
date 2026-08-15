@@ -6,7 +6,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { PetService } from './service.ts'
 import type { Config } from './index.ts'
 
-const BASE_CONFIG: Config = { enabled: true, size: 160, maxFps: 30, model: 'hiyori', debug: false, customModels: [], persona: 'tsundere' }
+const BASE_CONFIG: Config = { enabled: true, size: 160, maxFps: 30, model: 'hiyori', debug: false, showTapZones: false, customModels: [], persona: 'tsundere' }
 
 function makeHarness(overrides: Partial<Config> = {}) {
   const handlers = new Map<string, Array<(payload?: unknown, next?: () => void) => unknown>>()
@@ -49,6 +49,17 @@ describe('PetService 状态机', () => {
     expect(view.agent).toBe('idle')
     expect(view.version).toBe(0)
     expect(view.config.maxFps).toBe(30)
+    expect(view.config.spatialTap).toEqual({
+      headMaxNy: 0.30,
+      legMinNy: 0.57,
+      armMinNy: 0.28,
+      headMinNx: 0.32,
+      headMaxNx: 0.68,
+      bodyMinNx: 0.36,
+      bodyMaxNx: 0.64,
+      armLeftMinNx: 0.18,
+      armRightMaxNx: 0.82,
+    })
   })
 
   it('agent running → thinking，idle → idle', () => {
@@ -139,6 +150,22 @@ describe('PetService 显示配置', () => {
     expect(service.snapshot().config.modelUrl).toBe('https://example.com/a.model3.json')
     expect(makeHarness({ model: 'hiyori' }).service.snapshot().config.modelUrl).toMatch(/^https:\/\//)
     expect(makeHarness({ model: 'missing' }).service.snapshot().config.modelUrl).toBeNull()
+  })
+
+  it('snapshot.spatialTap：自定义覆盖合并，内置用默认', () => {
+    const { service } = makeHarness({
+      model: 'custom-a',
+      customModels: [{
+        id: 'custom-a',
+        name: 'A',
+        modelUrl: 'https://example.com/a.model3.json',
+        spatialTap: { headMaxNy: 0.45 },
+      }],
+    })
+    expect(service.snapshot().config.spatialTap.headMaxNy).toBe(0.45)
+    expect(service.snapshot().config.spatialTap.legMinNy).toBe(0.58)
+    expect(makeHarness({ model: 'hiyori' }).service.snapshot().config.spatialTap.headMaxNy).toBe(0.30)
+    expect(makeHarness({ model: 'mao' }).service.snapshot().config.spatialTap.headMinNx).toBe(0)
   })
 
   it('listCustomModels 返回配置中的自定义清单', () => {

@@ -41,7 +41,7 @@ function fakeRes() {
   }
 }
 
-const BASE_CONFIG: Config = { enabled: true, size: 160, maxFps: 30, model: 'hiyori', debug: false, customModels: [], persona: 'tsundere' }
+const BASE_CONFIG: Config = { enabled: true, size: 160, maxFps: 30, model: 'hiyori', debug: false, showTapZones: false, customModels: [], persona: 'tsundere' }
 
 function makeRoutes() {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-live2d-pets-route-'))

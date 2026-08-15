@@ -12,7 +12,18 @@
         "url": "https://www.live2d.com/eula/live2d-sample-model-terms_cn.html"
       },
       "cubism": 4,
-      "status": "annotated"
+      "status": "annotated",
+      "spatialTap": {
+        "headMaxNy": 0.30,
+        "legMinNy": 0.57,
+        "armMinNy": 0.28,
+        "headMinNx": 0.32,
+        "headMaxNx": 0.68,
+        "bodyMinNx": 0.36,
+        "bodyMaxNx": 0.64,
+        "armLeftMinNx": 0.18,
+        "armRightMaxNx": 0.82
+      }
     },
     {
       "id": "haru",

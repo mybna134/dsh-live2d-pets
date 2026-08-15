@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { listBuiltinPresets, resolveModelUrl } from './models.ts'
+import {
+  listBuiltinPresets,
+  resolveModelUrl,
+  resolveSpatialTap,
+  mergeSpatialTap,
+  DEFAULT_SPATIAL_TAP,
+} from './models.ts'
 
 describe('resolveModelUrl', () => {
   it('http(s) URL 原样返回', () => {
@@ -34,5 +40,47 @@ describe('listBuiltinPresets', () => {
       expect(p.license.url).toMatch(/^https:\/\//)
       expect(p.cubism).toBeGreaterThan(0)
     }
+  })
+})
+
+describe('mergeSpatialTap / resolveSpatialTap', () => {
+  it('无覆盖时等于默认', () => {
+    expect(mergeSpatialTap()).toEqual(DEFAULT_SPATIAL_TAP)
+    expect(mergeSpatialTap(null)).toEqual(DEFAULT_SPATIAL_TAP)
+  })
+
+  it('只覆盖写出的字段，其余沿用默认', () => {
+    expect(mergeSpatialTap({ headMaxNy: 0.4 })).toEqual({
+      ...DEFAULT_SPATIAL_TAP,
+      headMaxNy: 0.4,
+    })
+  })
+
+  it('越界夹到 0–1；旧键 armLeftMaxNx 映射 bodyMinNx', () => {
+    expect(mergeSpatialTap({ headMaxNy: 2, legMinNy: -1 }).headMaxNy).toBe(1)
+    expect(mergeSpatialTap({ headMaxNy: 2, legMinNy: -1 }).legMinNy).toBe(0)
+    expect(mergeSpatialTap({ armLeftMaxNx: 0.4, armRightMinNx: 0.7 }).bodyMinNx).toBe(0.4)
+    expect(mergeSpatialTap({ armLeftMaxNx: 0.4, armRightMinNx: 0.7 }).bodyMaxNx).toBe(0.7)
+  })
+
+  it('自定义覆盖优先于内置；Hiyori 使用预设居中五矩形', () => {
+    const custom = [{
+      id: 'my-mao',
+      name: '猫',
+      modelUrl: 'https://example.com/m.model3.json',
+      spatialTap: { headMaxNy: 0.4, legMinNy: 0.62 },
+    }]
+    expect(resolveSpatialTap('my-mao', custom).headMaxNy).toBe(0.4)
+    expect(resolveSpatialTap('my-mao', custom).bodyMinNx).toBe(DEFAULT_SPATIAL_TAP.bodyMinNx)
+
+    const hiyori = resolveSpatialTap('hiyori', [])
+    expect(hiyori.headMinNx).toBeGreaterThan(0)
+    expect(hiyori.headMaxNx).toBeLessThan(1)
+    expect(hiyori.bodyMinNx).toBeGreaterThan(hiyori.armLeftMinNx)
+    expect(hiyori.bodyMaxNx).toBeLessThan(hiyori.armRightMaxNx)
+    expect(hiyori.headMaxNy).toBe(0.30)
+
+    // 无预设覆盖的内置 → 默认
+    expect(resolveSpatialTap('mao', [])).toEqual(DEFAULT_SPATIAL_TAP)
   })
 })

@@ -10,8 +10,8 @@ import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-user-approval'
 import type { Config } from './index.ts'
-import type { CustomModelEntry } from './models.ts'
-import { resolveModelUrl } from './models.ts'
+import type { CustomModelEntry, SpatialTapConfig } from './models.ts'
+import { resolveModelUrl, resolveSpatialTap } from './models.ts'
 import {
   loadPetPersist,
   savePetPersist,
@@ -36,6 +36,10 @@ export interface PetStateView {
     /** 解析后的 .model3.json URL（模型 id → URL，spec §6）。 */
     modelUrl: string | null
     debug: boolean
+    /** 显示点击分区叠加层（空间回退色块）。 */
+    showTapZones: boolean
+    /** 当前模型生效的空间回退完整阈值（自定义可覆盖；spec §4）。 */
+    spatialTap: SpatialTapConfig
     /** 选中人设 id（内置或自定义；spec §3）。 */
     persona: string
   }
@@ -131,6 +135,8 @@ export class PetService {
         model: config.model,
         modelUrl: resolveModelUrl(config.model, config.customModels),
         debug: config.debug,
+        showTapZones: !!config.showTapZones,
+        spatialTap: resolveSpatialTap(config.model, config.customModels),
         persona: config.persona || DEFAULT_PERSONA_ID,
       },
       display: { ...this.display },

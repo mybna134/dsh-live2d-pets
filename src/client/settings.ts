@@ -11,8 +11,9 @@
 
 import { createElement, useCallback, useEffect, useRef, useState } from 'react'
 import type { CSSProperties, ChangeEvent, MouseEvent, ReactNode, ReactElement } from 'react'
-import type { CustomModelEntry } from '../index.ts'
+import type { CustomModelEntry, SpatialTapOverride } from '../index.ts'
 import type { BuiltinPreset } from '../models.ts'
+import { DEFAULT_SPATIAL_TAP } from '../models.ts'
 import type { CustomPersonaDef } from '../persona-shared.ts'
 import { PERSONAS_TEMPLATE } from '../persona-shared.ts'
 import { builtinPersonaOptions } from './personas.ts'
@@ -25,6 +26,8 @@ export interface PetSettingsValue {
   maxFps: number
   model: string
   debug: boolean
+  /** 显示点击分区叠加层（空间回退色块）。 */
+  showTapZones: boolean
   customModels: CustomModelEntry[]
   persona: string
 }
@@ -46,8 +49,63 @@ const DEFAULT_VALUE: PetSettingsValue = {
   maxFps: 30,
   model: 'hiyori',
   debug: false,
+  showTapZones: false,
   customModels: [],
   persona: 'tsundere',
+}
+
+/** 空间分区覆盖表单草稿（空字符串 = 该字段用全局默认）。 */
+type SpatialTapDraft = Record<keyof typeof DEFAULT_SPATIAL_TAP, string>
+
+const EMPTY_SPATIAL_DRAFT: SpatialTapDraft = {
+  headMaxNy: '',
+  legMinNy: '',
+  armMinNy: '',
+  headMinNx: '',
+  headMaxNx: '',
+  bodyMinNx: '',
+  bodyMaxNx: '',
+  armLeftMinNx: '',
+  armRightMaxNx: '',
+}
+
+const SPATIAL_FIELD_LABELS: { key: keyof SpatialTapDraft; label: string; hint: string }[] = [
+  { key: 'headMaxNy', label: '头下沿', hint: String(DEFAULT_SPATIAL_TAP.headMaxNy) },
+  { key: 'legMinNy', label: '腿上沿', hint: String(DEFAULT_SPATIAL_TAP.legMinNy) },
+  { key: 'armMinNy', label: '手臂顶', hint: String(DEFAULT_SPATIAL_TAP.armMinNy) },
+  { key: 'headMinNx', label: '头左', hint: String(DEFAULT_SPATIAL_TAP.headMinNx) },
+  { key: 'headMaxNx', label: '头右', hint: String(DEFAULT_SPATIAL_TAP.headMaxNx) },
+  { key: 'bodyMinNx', label: '身左', hint: String(DEFAULT_SPATIAL_TAP.bodyMinNx) },
+  { key: 'bodyMaxNx', label: '身右', hint: String(DEFAULT_SPATIAL_TAP.bodyMaxNx) },
+  { key: 'armLeftMinNx', label: '左臂左', hint: String(DEFAULT_SPATIAL_TAP.armLeftMinNx) },
+  { key: 'armRightMaxNx', label: '右臂右', hint: String(DEFAULT_SPATIAL_TAP.armRightMaxNx) },
+]
+
+function draftFromOverride(o?: SpatialTapOverride | null): SpatialTapDraft {
+  return {
+    headMaxNy: o?.headMaxNy != null ? String(o.headMaxNy) : '',
+    legMinNy: o?.legMinNy != null ? String(o.legMinNy) : '',
+    armMinNy: o?.armMinNy != null ? String(o.armMinNy) : '',
+    headMinNx: o?.headMinNx != null ? String(o.headMinNx) : '',
+    headMaxNx: o?.headMaxNx != null ? String(o.headMaxNx) : '',
+    bodyMinNx: o?.bodyMinNx != null ? String(o.bodyMinNx) : (o?.armLeftMaxNx != null ? String(o.armLeftMaxNx) : ''),
+    bodyMaxNx: o?.bodyMaxNx != null ? String(o.bodyMaxNx) : (o?.armRightMinNx != null ? String(o.armRightMinNx) : ''),
+    armLeftMinNx: o?.armLeftMinNx != null ? String(o.armLeftMinNx) : '',
+    armRightMaxNx: o?.armRightMaxNx != null ? String(o.armRightMaxNx) : '',
+  }
+}
+
+/** 草稿 → 覆盖对象；全空则 undefined（不写字段）。 */
+function overrideFromDraft(d: SpatialTapDraft): SpatialTapOverride | undefined {
+  const out: SpatialTapOverride = {}
+  for (const { key } of SPATIAL_FIELD_LABELS) {
+    const raw = d[key].trim()
+    if (!raw) continue
+    const n = Number(raw)
+    if (!Number.isFinite(n)) continue
+    out[key] = Math.min(1, Math.max(0, n))
+  }
+  return Object.keys(out).length > 0 ? out : undefined
 }
 
 const SETTINGS_API = '/api/live2d-pet/settings'
@@ -97,6 +155,31 @@ const inputStyle: CSSProperties = {
   fontSize: 13,
   minWidth: 0,
   flex: 1,
+}
+
+function spatialTapFields(
+  draft: SpatialTapDraft,
+  setDraft: (next: SpatialTapDraft) => void,
+  disabled: boolean,
+): ReactElement {
+  return createElement('div', {
+    style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(88px,1fr))', gap: 6, marginTop: 8 },
+  },
+    ...SPATIAL_FIELD_LABELS.map(({ key, label, hint }) => createElement('label', {
+      key,
+      style: { display: 'flex', flexDirection: 'column', gap: 2, fontSize: 11, color: '#888' },
+    },
+      `${label} (默认 ${hint})`,
+      createElement('input', {
+        style: { ...inputStyle, width: '100%', boxSizing: 'border-box' as const },
+        inputMode: 'decimal',
+        placeholder: hint,
+        disabled,
+        value: draft[key],
+        onChange: (e: ChangeEvent<HTMLInputElement>) => setDraft({ ...draft, [key]: e.target.value }),
+      }),
+    )),
+  )
 }
 
 const sectionTitleStyle: CSSProperties = {
@@ -484,9 +567,13 @@ export function PetSettingsSection(props: PetSettingsProps): ReactNode {
   // 自定义模型表单（添加 + 编辑）
   const [newName, setNewName] = useState('')
   const [newUrl, setNewUrl] = useState('')
+  const [newSpatial, setNewSpatial] = useState<SpatialTapDraft>(EMPTY_SPATIAL_DRAFT)
+  const [showNewSpatial, setShowNewSpatial] = useState(false)
   const [editId, setEditId] = useState<string | null>(null)
   const [editName, setEditName] = useState('')
   const [editUrl, setEditUrl] = useState('')
+  const [editSpatial, setEditSpatial] = useState<SpatialTapDraft>(EMPTY_SPATIAL_DRAFT)
+  const [showEditSpatial, setShowEditSpatial] = useState(false)
 
   const custom = value.customModels ?? []
 
@@ -506,20 +593,44 @@ export function PetSettingsSection(props: PetSettingsProps): ReactNode {
     const name = newName.trim()
     const url = newUrl.trim()
     if (!name || !/^https?:\/\//.test(url)) return
-    const entry: CustomModelEntry = { id: `m${Date.now()}`, name, modelUrl: url }
+    const spatialTap = overrideFromDraft(newSpatial)
+    const entry: CustomModelEntry = spatialTap
+      ? { id: `m${Date.now()}`, name, modelUrl: url, spatialTap }
+      : { id: `m${Date.now()}`, name, modelUrl: url }
     enqueueWrite((current) => [{ op: 'set', path: ['customModels'], value: [...current.customModels, entry] }])
     setNewName('')
     setNewUrl('')
+    setNewSpatial(EMPTY_SPATIAL_DRAFT)
+    setShowNewSpatial(false)
   }
 
   const saveEdit = (id: string) => {
     const name = editName.trim()
     const url = editUrl.trim()
     if (!name || !/^https?:\/\//.test(url)) return
+    const spatialTap = overrideFromDraft(editSpatial)
     enqueueWrite((current) => [
-      { op: 'set', path: ['customModels'], value: current.customModels.map((c) => (c.id === id ? { ...c, name, modelUrl: url } : c)) },
+      {
+        op: 'set',
+        path: ['customModels'],
+        value: current.customModels.map((c) => {
+          if (c.id !== id) return c
+          const next: CustomModelEntry = { id: c.id, name, modelUrl: url }
+          if (spatialTap) next.spatialTap = spatialTap
+          return next
+        }),
+      },
     ])
     setEditId(null)
+    setShowEditSpatial(false)
+  }
+
+  const beginEdit = (c: CustomModelEntry) => {
+    setEditId(c.id)
+    setEditName(c.name)
+    setEditUrl(c.modelUrl)
+    setEditSpatial(draftFromOverride(c.spatialTap))
+    setShowEditSpatial(!!c.spatialTap && Object.keys(c.spatialTap).length > 0)
   }
 
   const removeModel = (id: string) => {
@@ -590,32 +701,45 @@ export function PetSettingsSection(props: PetSettingsProps): ReactNode {
   ))
 
   const customRows = custom.map((c) => {
+    const hasOverride = !!c.spatialTap && Object.keys(c.spatialTap).length > 0
     if (editId === c.id) {
-      return createElement('div', { key: c.id, style: { ...rowStyle, display: 'flex', gap: 6, alignItems: 'center' } },
-        createElement('input', {
-          style: inputStyle,
-          value: editName,
-          placeholder: '名称',
-          onChange: (e: ChangeEvent<HTMLInputElement>) => setEditName(e.target.value),
-        }),
-        createElement('input', {
-          style: inputStyle,
-          value: editUrl,
-          placeholder: 'https://…/model3.json',
-          onChange: (e: ChangeEvent<HTMLInputElement>) => setEditUrl(e.target.value),
-        }),
-        createElement('button', { style: buttonStyle, onClick: () => saveEdit(c.id) }, '保存'),
-        createElement('button', { style: buttonStyle, onClick: () => setEditId(null) }, '取消'),
+      return createElement('div', { key: c.id, style: { ...rowStyle, display: 'flex', flexDirection: 'column', gap: 6 } },
+        createElement('div', { style: { display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' } },
+          createElement('input', {
+            style: inputStyle,
+            value: editName,
+            placeholder: '名称',
+            onChange: (e: ChangeEvent<HTMLInputElement>) => setEditName(e.target.value),
+          }),
+          createElement('input', {
+            style: { ...inputStyle, flex: 1, minWidth: 120 },
+            value: editUrl,
+            placeholder: 'https://…/model3.json',
+            onChange: (e: ChangeEvent<HTMLInputElement>) => setEditUrl(e.target.value),
+          }),
+          createElement('button', { style: buttonStyle, onClick: () => saveEdit(c.id) }, '保存'),
+          createElement('button', { style: buttonStyle, onClick: () => { setEditId(null); setShowEditSpatial(false) } }, '取消'),
+        ),
+        createElement('button', {
+          type: 'button',
+          style: { ...buttonStyle, marginLeft: 0, alignSelf: 'flex-start' },
+          onClick: () => setShowEditSpatial((v) => !v),
+        }, showEditSpatial ? '收起空间分区覆盖' : '空间分区覆盖（可选）'),
+        showEditSpatial && createElement('div', { key: 'edit-spatial' },
+          createElement('div', { style: { fontSize: 11, color: '#888', marginBottom: 4 } },
+            '相对包围盒 0–1；留空=该字段用全局默认。改完请开「显示点击分区」对照色块。'),
+          spatialTapFields(editSpatial, setEditSpatial, !writable),
+        ),
       )
     }
     return modelRow(
       `custom-${c.id}`,
       value.model === c.id,
       () => enqueueWrite(() => [{ op: 'set', path: ['model'], value: c.id }]),
-      c.name,
+      hasOverride ? `${c.name} · 分区已覆盖` : c.name,
       !writable,
       createElement('span', { key: 'actions' },
-        createElement('button', { style: buttonStyle, onClick: () => { setEditId(c.id); setEditName(c.name); setEditUrl(c.modelUrl) } }, '修改'),
+        createElement('button', { style: buttonStyle, onClick: () => beginEdit(c) }, '修改'),
         createElement('button', { style: buttonStyle, onClick: () => removeModel(c.id) }, '删除'),
       ),
       undefined,
@@ -747,39 +871,66 @@ export function PetSettingsSection(props: PetSettingsProps): ReactNode {
     createElement('div', { role: 'radiogroup', 'aria-label': '我的模型' },
       customRows.length > 0 ? customRows : createElement('div', { style: { color: '#888', fontSize: 12, marginBottom: 8 } }, '尚未添加自定义模型'),
     ),
-    createElement('div', { style: { display: 'flex', gap: 6, alignItems: 'center' } },
-      createElement('input', {
-        style: inputStyle,
-        value: newName,
-        placeholder: '名称',
+    createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 6 } },
+      createElement('div', { style: { display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' } },
+        createElement('input', {
+          style: inputStyle,
+          value: newName,
+          placeholder: '名称',
+          disabled: !writable,
+          onChange: (e: ChangeEvent<HTMLInputElement>) => setNewName(e.target.value),
+        }),
+        createElement('input', {
+          style: { ...inputStyle, flex: 1, minWidth: 140 },
+          value: newUrl,
+          placeholder: 'https://…/xxx.model3.json',
+          disabled: !writable,
+          onChange: (e: ChangeEvent<HTMLInputElement>) => setNewUrl(e.target.value),
+        }),
+        createElement('button', { style: buttonStyle, onClick: addModel, disabled: !writable }, '添加'),
+      ),
+      createElement('button', {
+        type: 'button',
+        style: { ...buttonStyle, marginLeft: 0, alignSelf: 'flex-start' },
         disabled: !writable,
-        onChange: (e: ChangeEvent<HTMLInputElement>) => setNewName(e.target.value),
-      }),
-      createElement('input', {
-        style: inputStyle,
-        value: newUrl,
-        placeholder: 'https://…/xxx.model3.json',
-        disabled: !writable,
-        onChange: (e: ChangeEvent<HTMLInputElement>) => setNewUrl(e.target.value),
-      }),
-      createElement('button', { style: buttonStyle, onClick: addModel, disabled: !writable }, '添加'),
+        onClick: () => setShowNewSpatial((v) => !v),
+      }, showNewSpatial ? '收起空间分区覆盖' : '空间分区覆盖（可选）'),
+      showNewSpatial && createElement('div', { key: 'new-spatial' },
+        createElement('div', { style: { fontSize: 11, color: '#888', marginBottom: 4 } },
+          '相对包围盒 0–1；留空=该字段用全局默认。适合大帽子/全身比例与默认差较多的模型。'),
+        spatialTapFields(newSpatial, setNewSpatial, !writable),
+      ),
     ),
   ))
 
-  // 6. 调试模式（与上方模型添加区留出间距）
-  children.push(createElement('div', { key: 'debug', style: { ...rowStyle, marginTop: 12 } },
-    createElement('label', { style: labelStyle },
-      createElement('input', {
-        type: 'checkbox',
-        checked: !!value.debug,
-        disabled: !writable,
-        // 同 enabled:事件期捕获,避免受控复位覆盖出队时的读取
-        onChange: (e: ChangeEvent<HTMLInputElement>) => {
-          const next = e.target.checked
-          enqueueWrite(() => [{ op: 'set', path: ['debug'], value: next }])
-        },
-      }),
-      createElement('span', null, '调试模式（显示调试面板）'),
+  // 6. 开发者选项：调试面板 + 点击分区叠加
+  children.push(createElement('div', { key: 'devtools' },
+    createElement('div', { style: sectionTitleStyle }, '开发者选项'),
+    createElement('div', { style: rowStyle },
+      createElement('label', { style: labelStyle },
+        createElement('input', {
+          type: 'checkbox',
+          checked: !!value.debug,
+          disabled: !writable,
+          onChange: (e: ChangeEvent<HTMLInputElement>) => {
+            const next = e.target.checked
+            enqueueWrite(() => [{ op: 'set', path: ['debug'], value: next }])
+          },
+        }),
+        createElement('span', null, '调试模式（显示调试面板）'),
+      ),
+      createElement('label', { style: { ...labelStyle, marginTop: 8 } },
+        createElement('input', {
+          type: 'checkbox',
+          checked: !!value.showTapZones,
+          disabled: !writable,
+          onChange: (e: ChangeEvent<HTMLInputElement>) => {
+            const next = e.target.checked
+            enqueueWrite(() => [{ op: 'set', path: ['showTapZones'], value: next }])
+          },
+        }),
+        createElement('span', null, '显示点击分区（空间回退色块）'),
+      ),
     ),
   ))
 
