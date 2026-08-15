@@ -15,8 +15,10 @@
 
 import { createElement, useEffect, useRef } from 'react'
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
+import type { ReactNode } from 'react'
 import type { PetState, PetStateView } from '../service.ts'
 import { PetSettingsSection } from './settings.ts'
+import { installPetSettingsNavIcon, pawNavIcon } from './paw-icon.ts'
 import { resolvePersonaCopy, BUILTIN_PERSONAS } from './personas.ts'
 import type { CopyTable } from '../persona-shared.ts'
 import { DEFAULT_PERSONA_ID } from '../persona-shared.ts'
@@ -105,6 +107,8 @@ interface SlotsLike {
       id: string
       order?: number
       label?: string | (() => string)
+      /** 设置导航图标：ReactNode 或按尺寸渲染（与 better-sidebar 等同款约定）。 */
+      icon?: ReactNode | ((size: number) => ReactNode)
       inject?: () => Record<string, unknown>
     },
     component: (props: unknown) => unknown,
@@ -770,13 +774,26 @@ export function apply(ctx: ClientContext): void {
   // 桌宠配置设置页（settings.section，spec §2）：开关/尺寸/人设/模型列表/调试，
   // 读写经插件自身 API（/api/live2d-pet/settings，Host 直连 ctx.settings；
   // 不走 settingsScope wire，见 docs/research/settings-tab.md「设置服务不可用」根因）。
-  slots.inject('settings.section', () => slots.register(
-    {
-      name: 'settings.section',
-      id: 'live2d-pet',
-      order: 200,
-      label: () => '桌宠配置',
-    },
-    () => createElement(PetSettingsSection, { openPath }),
-  ))
+  // 桌宠配置设置页（settings.section，spec §2）：开关/尺寸/人设/模型列表/调试，
+  // 读写经插件自身 API（/api/live2d-pet/settings，Host 直连 ctx.settings；
+  // 不走 settingsScope wire，见 docs/research/settings-tab.md「设置服务不可用」根因）。
+  // 导航爪印：平台 settings-general 按 id 硬编码图标（未知 id→齿轮），故 register.icon
+  // 暂不生效；installPetSettingsNavIcon 在 DOM 层替换，卸载时一并清理。
+  slots.inject('settings.section', () => {
+    const stopNavIcon = installPetSettingsNavIcon()
+    const disposeSection = slots.register(
+      {
+        name: 'settings.section',
+        id: 'live2d-pet',
+        order: 200,
+        label: () => '桌宠配置',
+        icon: pawNavIcon,
+      },
+      () => createElement(PetSettingsSection, { openPath }),
+    )
+    return () => {
+      stopNavIcon()
+      disposeSection()
+    }
+  })
 }

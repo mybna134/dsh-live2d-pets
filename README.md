@@ -1,16 +1,21 @@
 # dsh-live2d-pets 🐾
 
-DSH（DeepSeek Harness）的 Live2D 桌宠插件：**Agent 状态镜像 + 互动陪伴**。
+<p align="center">
+  <img src="docs/media/hero.png" alt="dsh-live2d-pets 主视觉" width="920" />
+</p>
 
-> Live2D pet plugin for DeepSeek Harness — an agent state mirror with interactive companionship.
+DSH（DeepSeek Harness）的 Live2D 桌宠插件：**支持任意外部 URL 或本地模型地址加载 Live2D 模型**。
 
-## 特性（v0.1.2）
+> Live2D pet plugin for DeepSeek Harness — load models from any external URL or local model path.
 
-- **状态镜像**：宠物实时反映 agent 思考 / 空闲 / 出错 / 完成 / 等审批（动画 + 气泡）
-- **互动陪伴**：摸头 / 点击反应 / 拖动停靠，任务完成庆祝
-- **桌宠配置设置面板**：DSH 设置 →「桌宠配置」tab，四项设置（开关 / 尺寸滑杆 / 模型列表 / 调试模式），写入 `~/.dsh/settings.yaml` 用户层，即时生效
-- **模型列表**：5 条内置策展模型（Hiyori / Haru / Mao / Mark / Natori，条目展示许可类型与链接）+ 用户自定义模型增删改（名称 + `.model3.json` URL）
-- **不打扰**：默认右下角、小尺寸、可拖动、可隐藏、标签页隐藏暂停渲染、低配降级静态头像
+## 特性
+
+- **模型加载**：内置 5 条策展模型（Hiyori / Haru / Mao / Mark / Natori）+ 自定义条目；可用任意 `.model3.json` 的 **https / http URL**，或本机可达的本地模型地址
+- **状态镜像**：宠物实时反映 agent 思考 / 空闲 / 出错 / 完成 / 等审批（动画 + 气泡，SSE 推送）
+- **人设台词**：内置六种人设（傲娇 / 元气 / 天然呆 / 三无 / 温柔治愈 / 病娇），可在插件独有 JSONC 中自定义并热切换
+- **互动陪伴**：分部位触摸反应 / 拖动停靠，任务完成庆祝
+- **桌宠配置设置面板**：DSH 设置 →「桌宠配置」，开关 / 尺寸 / 人设 / 模型列表 / 调试；写入 `~/.dsh/settings.yaml`，即时生效
+- **不打扰**：默认右下角、小尺寸、可拖动、可隐藏、标签页隐藏暂停渲染、限帧渲染、低配降级静态头像
 
 ## 快速开始
 
@@ -41,13 +46,15 @@ dsh web
 
 浏览器打开后，右下角会出现默认宠物（尺寸 160px）。当前默认模型为 Hiyori（Live2D 官方示例模型），首次加载需联网。
 
+自定义模型：打开设置 →「桌宠配置」→「我的模型」，填写名称与 `.model3.json` 地址（外网 CDN、自建静态站或本机 HTTP 服务均可）。
+
 ### 配置设置
 
 配置有两个层次（[研究文档](docs/research/settings-tab.md)）：
 
 | 层次 | 位置 | 说明 |
 |------|------|------|
-| **设置面板（推荐）** | DSH 设置 →「桌宠配置」 | 开关 / 尺寸滑杆 / 模型列表 / 调试模式；写入 `~/.dsh/settings.yaml` 用户层，**立即生效**（轮询 800ms 内应用到宠物） |
+| **设置面板（推荐）** | DSH 设置 →「桌宠配置」 | 开关 / 尺寸 / 人设 / 模型列表 / 调试；写入 `~/.dsh/settings.yaml` 用户层，**立即生效** |
 | **base 层** | web profile 的 patch（未设置 `$DSH_HOME` 时为 `~/.dsh/profiles/web/cordis.patch.yml`） | 按 id 覆盖插件配置作为 base；**未在用户层覆盖的字段**生效——patch 整体替换 `config`，未改字段也要一并重述 |
 
 ```yaml
@@ -56,11 +63,12 @@ dsh web
   config:
     enabled: true # 总开关
     size: 160     # 宠物尺寸（px），范围 40–400
-    model: hiyori # 模型：内置预设 id（hiyori/haru/mao/mark/natori）、自定义模型 id，或 .model3.json URL
+    model: hiyori # 模型：内置预设 id、自定义模型 id，或 .model3.json URL
+    persona: tsundere # 人设 id（内置或自定义）
     debug: false  # 调试面板（开发用）
 ```
 
-> 设置面板写入的字段会覆盖 base 层；「我的模型」里增删改的自定义模型与选中项同样持久化到用户层。模型清单见 [`src/presets/presets.json`](src/presets/presets.json)。
+> 设置面板写入的字段会覆盖 base 层；「我的模型」里增删改的自定义模型与选中项同样持久化到用户层。模型清单见 [`src/presets/presets.json`](src/presets/presets.json)。自定义人设见 `$DSH_HOME/live2d-pet-personas.json`（[ADR-007](docs/adr/007-personas-plugin-owned-jsonc-file.md)）。
 
 ### 卸载
 
@@ -80,8 +88,8 @@ dsh plugin --profile web remove dsh-live2d-pets
 ## 技术栈
 
 - pixi-live2d-display 0.4.0 + PixiJS 6.5.10 + Cubism Core 4（[ADR-003](docs/adr/003-spike-results-and-rendering-stack.md)）
-- 客户端渲染于 DSH Web GUI 的 `shell.overlay` 悬浮层，设置页注册于 `settings.section`（[ADR-002](docs/adr/002-pet-mount-and-state-source.md)）
-- 状态推送：Host 订阅 `agent/*` 事件 → Client 轮询拉取（800ms，标签页隐藏暂停）
+- 客户端渲染于 DSH Web GUI 的 `shell.overlay` 悬浮层（视觉层 Popover 顶层，[ADR-005](docs/adr/005-pet-visual-top-layer-popover.md)），设置页注册于 `settings.section`（[ADR-002](docs/adr/002-pet-mount-and-state-source.md)）
+- 状态推送：Host 订阅 `agent/*` 事件 → 同源 SSE `/api/live2d-pet/events`（[ADR-006](docs/adr/006-push-state-sse.md)）；标签页隐藏 / 失焦暂停渲染
 - 设置持久化：Host `ctx.settings`（`~/.dsh/settings.yaml` 用户层覆盖 base）；传输走插件自身 API `/api/live2d-pet/settings`（settingsScope wire 白名单限制，见 [research 3.4/3.5](docs/research/settings-tab.md)）
 
 ## 许可
