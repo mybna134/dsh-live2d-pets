@@ -11,7 +11,7 @@ English | [简体中文](README.md)
 A Live2D desk-pet plugin for **DeepSeek Harness (DSH)**: **load Live2D models from any external URL or reachable local model path**.
 
 <p align="center">
-  <img src="docs/media/hero.png" alt="dsh-live2d-pets hero" width="920" />
+  <img src="docs/media/hero.jpg" alt="dsh-live2d-pets hero" width="920" />
 </p>
 
 ## Features

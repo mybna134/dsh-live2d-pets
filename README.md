@@ -11,7 +11,7 @@
 DSH（DeepSeek Harness）的 Live2D 桌宠插件：**支持任意外部 URL 或本地模型地址加载 Live2D 模型**。
 
 <p align="center">
-  <img src="docs/media/hero.png" alt="dsh-live2d-pets 主视觉" width="920" />
+  <img src="docs/media/hero.jpg" alt="dsh-live2d-pets 主视觉" width="920" />
 </p>
 
 ## 特性
