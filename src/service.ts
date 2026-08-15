@@ -40,12 +40,16 @@ export interface PetStateView {
 /** "完成"庆祝状态在回到空闲前的保持时长（ms）。 */
 const DONE_HOLD_MS = 3500
 
+/** 变化通知监听器（状态/显示/配置变化时触发，供 SSE 推送使用）。 */
+type ChangeListener = () => void
+
 export class PetService {
   private state: PetState = 'idle'
   private agent = 'idle'
   private version = 0
   private display: PetDisplay
   private doneTimerId: ReturnType<typeof setTimeout> | undefined
+  private listeners = new Set<ChangeListener>()
 
   constructor(
     private readonly ctx: Context,
@@ -86,6 +90,7 @@ export class PetService {
     if (this.state === next) return
     this.state = next
     this.version += 1
+    this.emitChange()
   }
 
   /** 进入"完成"并保持 DONE_HOLD_MS 后回空闲（客户端据此播庆祝动画）。 */
@@ -129,6 +134,7 @@ export class PetService {
     })
     savePetPersist(this.display)
     this.version += 1
+    this.emitChange()
     return { ...this.display }
   }
 
@@ -137,6 +143,22 @@ export class PetService {
     this.display = { ...DEFAULT_DISPLAY }
     savePetPersist(this.display)
     this.version += 1
+    this.emitChange()
     return { ...this.display }
+  }
+
+  /** 订阅变化推送（状态/显示变化自动触发）；返回退订函数。 */
+  onChange(listener: ChangeListener): () => void {
+    this.listeners.add(listener)
+    return () => { this.listeners.delete(listener) }
+  }
+
+  /** 配置（settings 解析值）变化后由外部调用，触发一次推送（ADR-006）。 */
+  notifyConfigChanged(): void {
+    this.emitChange()
+  }
+
+  private emitChange(): void {
+    for (const listener of this.listeners) listener()
   }
 }

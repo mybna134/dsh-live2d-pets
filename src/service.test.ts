@@ -145,3 +145,39 @@ describe('PetService 显示配置', () => {
     expect(service.listCustomModels()).toEqual([{ id: 'x', name: 'X', modelUrl: 'https://x/m3.json' }])
   })
 })
+
+describe('PetService 变更订阅', () => {
+  it('onChange 在状态/显示变化与 notifyConfigChanged 时触发,退订后不再触发', () => {
+    const { service, emit } = makeHarness()
+    const listener = vi.fn()
+    const unsubscribe = service.onChange(listener)
+    emit('agent/status', { status: 'running' })
+    expect(listener).toHaveBeenCalledTimes(1)
+    service.setDisplay({ size: 200 })
+    expect(listener).toHaveBeenCalledTimes(2)
+    service.notifyConfigChanged()
+    expect(listener).toHaveBeenCalledTimes(3)
+    unsubscribe()
+    emit('agent/error', {})
+    expect(listener).toHaveBeenCalledTimes(3)
+  })
+
+  it('同一状态重复事件不触发通知', () => {
+    const { service, emit } = makeHarness()
+    const listener = vi.fn()
+    service.onChange(listener)
+    emit('agent/status', { status: 'running' })
+    emit('agent/status', { status: 'running' })
+    expect(listener).toHaveBeenCalledTimes(1)
+  })
+
+  it('done 保持期计时回收回 idle 也触发通知', () => {
+    const { service, emit } = makeHarness()
+    const listener = vi.fn()
+    service.onChange(listener)
+    emit('agent/turn-stopping', {})
+    expect(listener).toHaveBeenCalledTimes(1)
+    vi.advanceTimersByTime(3500)
+    expect(listener).toHaveBeenCalledTimes(2)
+  })
+})
