@@ -84,6 +84,7 @@ DSH Web GUI 中一只悬浮于角落的 Live2D 桌宠，实时镜像当前会话
 - 挂载：Client Slot `shell.overlay`；设置入口：Client Slot `settings.section`（独立设置页，ADR-002）+ Host `ctx.settings` namespace（`$DSH_HOME/settings.yaml`；base = cordis.yml 条目 config 子集，用户层覆盖；模型列表自定义条目存于同一 namespace）
 - 设置传输：**不走 settingsScope wire**（dsh-host-apiproxy 白名单不暴露第三方 namespace，官方 deferred work，见 research 3.4）；改走插件自身同源 API `GET/POST /api/live2d-pet/settings`（Host 直连 `ctx.settings`，持久化语义不变，research 3.5）
 - 状态源：Host 订阅 `agent/status`、`agent/error`、`agent/turn-stopping` 等（ADR-002）
+- 状态传输：Host→Client 经同源 **SSE 端点 `/api/live2d-pet/events`** 推送（连接即回发快照 + 变更推送 + 30s 心跳，ADR-006），替代 v0.1 的 800ms 轮询；初始首帧仍走 `GET /api/live2d-pet/state`
 - 模型清单条目许可可标注（类型 + 链接，NC 标注）；默认模型商用安全；SDK 按 Live2D 官方条款
 - **spike 结果（见 ADR-003）**：WebGL ✅ / DOM·script 注入 ✅ / CDN 脚本加载 ✅ / Host→Client 轮询 ✅ / 模型渲染 ✅ / 动作·表情 ✅ / 触摸命中 ✅；Cubism 5 兼容未验证
 - **已定稿（原待定项，结论并入对应章节）**：

@@ -33,7 +33,7 @@ Proposed
 
 3. **Host 半区**：插件模块导出 `apply(ctx, config)`；用 `ctx.webServer.register(route)` 注册同源 JSON API（`/api/live2d-pet/*`）与模型资产静态路由（`/pet-assets/*`）；订阅 `agent/status`、`agent/error`、`agent/turn-stopping`、`approval/request`、`agent/inbox/inserted` → 宠物状态机（事件经 `Event.listEvents` 实测存在）。
 
-4. **Client 半区**：`package.json` 声明 `"dsh": { "client": { "platform": "web", "inject": [...] } }` 与 `exports["./client"]`（构建为 `window.__ModuleLoader__.load` 契约，tsdown）；优先挂载 `shell.overlay`（实测存在，root 级、replaceRisk=none），不可用则回退 `document.body` 全局 React root；通信为同源 fetch 轮询（800ms，visibility-aware）。
+4. **Client 半区**：`package.json` 声明 `"dsh": { "client": { "platform": "web", "inject": [...] } }` 与 `exports["./client"]`（构建为 `window.__ModuleLoader__.load` 契约，tsdown）；优先挂载 `shell.overlay`（实测存在，root 级、replaceRisk=none），不可用则回退 `document.body` 全局 React root；状态通信为同源 **SSE 推送**（`/api/live2d-pet/events`，ADR-006，取代本稿原定的 fetch 轮询）；配置读写为同源 JSON API。
 
 5. **构建链**：TypeScript + `tsc -b && tsdown` + vitest；CSS Modules 由 lightningcss 内联；React/cordis 外部化。
 

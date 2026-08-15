@@ -11,3 +11,4 @@
 | [003](003-spike-results-and-rendering-stack.md) | 渲染栈落地与 spike 验证结果 | Accepted |
 | [004](004-plugin-packaging-and-communication.md) | 插件打包形态与通信架构（DSH 实证调研） | Proposed |
 | [005](005-pet-visual-top-layer-popover.md) | 宠物视觉层挂载：Popover API（浏览器顶层），回退 body portal | Accepted |
+| [006](006-push-state-sse.md) | Host→Client 状态传输：SSE 推送替代轮询（supersede ADR-004 通信条款） | Accepted |
