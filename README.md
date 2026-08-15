@@ -2,15 +2,17 @@
 
 [English](README.en.md) | 简体中文
 
-[npm](https://www.npmjs.com/package/dsh-live2d-pets)
-[License: MIT](https://opensource.org/licenses/MIT)
-[Node.js](https://nodejs.org/)
-[GitHub release](https://github.com/cyanfish-x/dsh-live2d-pets/releases)
-[dsh-plugin](https://github.com/topics/dsh-plugin)
+[![npm](https://img.shields.io/npm/v/dsh-live2d-pets.svg)](https://www.npmjs.com/package/dsh-live2d-pets)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Node.js](https://img.shields.io/node/v/dsh-live2d-pets.svg)](https://nodejs.org/)
+[![GitHub release](https://img.shields.io/github/v/release/cyanfish-x/dsh-live2d-pets)](https://github.com/cyanfish-x/dsh-live2d-pets/releases)
+[![dsh-plugin](https://img.shields.io/badge/topic-dsh--plugin-1f6feb)](https://github.com/topics/dsh-plugin)
 
 DSH（DeepSeek Harness）的 Live2D 桌宠插件：**支持任意外部 URL 或本地模型地址加载 Live2D 模型**。
 
-
+<p align="center">
+  <img src="docs/media/hero.png" alt="dsh-live2d-pets 主视觉" width="920" />
+</p>
 
 ## 特性
 
