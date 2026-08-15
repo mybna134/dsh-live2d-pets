@@ -1,6 +1,6 @@
 {
   "name": "dsh-live2d-pets",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "Live2D pet plugin for DeepSeek Harness: load models from any external URL or local model path",
   "type": "module",
   "main": "lib/index.js",
