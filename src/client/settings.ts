@@ -317,7 +317,8 @@ function ThemeRadioGroup(props: ThemeRadioGroupProps): ReactElement {
       selected: o.id === value,
       disabled,
       onSelect: () => onChange(o.id),
-    }, createElement('span', null, o.name))),
+      children: createElement('span', null, o.name),
+    })),
   )
 }
 
@@ -473,11 +474,10 @@ function modelRow(
       disabled,
       onSelect,
       style: { ...labelStyle, margin: 0, flex: 1 },
-    },
-      createElement('span', {
+      children: createElement('span', {
         style: { flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'left' },
       }, meta),
-    ),
+    }),
     licenseLink,
     actions,
   )
