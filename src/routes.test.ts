@@ -24,16 +24,20 @@ function fakeReq(method: string, body?: string): IncomingMessage {
   return req as unknown as IncomingMessage
 }
 
-/** 伪 ServerResponse：记录状态码/头/响应体。 */
+/** 伪 ServerResponse：记录状态码/头/响应体（含流式 write，供 SSE 用例）。 */
 function fakeRes() {
   const state = { status: 0, headers: {} as Record<string, string>, body: Buffer.alloc(0) }
+  const append = (chunk?: unknown) => {
+    if (chunk instanceof Buffer) state.body = Buffer.concat([state.body, chunk])
+    else if (chunk !== undefined) state.body = Buffer.concat([state.body, Buffer.from(String(chunk))])
+  }
   return {
     state,
     writeHead: (status: number, headers: Record<string, string> = {}) => { state.status = status; state.headers = headers },
-    end: (chunk?: unknown) => {
-      if (chunk instanceof Buffer) state.body = Buffer.concat([state.body, chunk])
-      else if (chunk !== undefined) state.body = Buffer.concat([state.body, Buffer.from(String(chunk))])
-    },
+    write: append,
+    end: append,
+    // SSE 处理器会监听 res 的 error/close；测试里连接关闭走 req.emit('close') 触发
+    on: () => {},
   }
 }
 
@@ -55,14 +59,20 @@ function makeRoutes() {
     effect: (fn: () => () => void) => { fn() },
   } as unknown as Context
   const service = new PetService(ctx, () => BASE_CONFIG)
+  const emit = (event: string, payload?: unknown) => {
+    const next = vi.fn()
+    for (const fn of handlers.get(event) ?? []) fn(payload, next)
+    return next
+  }
   const settings = {
     view: () => ({ value: BASE_CONFIG, writable: true }),
     write: vi.fn(async () => {}),
   }
-  const routes = makePetRoutes({ service, packageRoot: dir, settings })
+  const openStreams: Array<() => void> = []
+  const routes = makePetRoutes({ service, packageRoot: dir, settings, onStream: (close) => { openStreams.push(close) } })
   const route = (path: string) => routes.find((r) => r.path === path)
   const cleanup = () => { delete process.env.DSH_HOME; rmSync(dir, { recursive: true, force: true }) }
-  return { route, settings, cleanup }
+  return { route, settings, service, emit, openStreams, cleanup }
 }
 
 /** GET 路由的 handler 不返回 Promise，等一个事件循环轮次让异步完成。 */
@@ -141,6 +151,61 @@ describe('makePetRoutes API 路由', () => {
     expect(res.state.status).toBe(400)
     const body = JSON.parse(res.state.body.toString('utf8'))
     expect(body.error).toBe('body-too-large')
+    cleanup()
+  })
+})
+
+describe('makePetRoutes SSE 状态推送', () => {
+  it('GET /events 首帧回发快照,状态变化后推送新帧', () => {
+    const { route, emit, cleanup } = makeRoutes()
+    const res = fakeRes()
+    const req = fakeReq('GET')
+    route(`${PET_API_PREFIX}/events`)!.handler(req, res as never)
+    expect(res.state.status).toBe(200)
+    expect(res.state.headers['content-type']).toContain('text/event-stream')
+    const first = res.state.body.toString('utf8')
+    expect(first).toContain('retry: 3000')
+    expect(first).toContain('"state":"idle"')
+    emit('agent/status', { status: 'running' })
+    expect(res.state.body.toString('utf8')).toContain('"state":"thinking"')
+    req.emit('close')
+    cleanup()
+  })
+
+  it('心跳注释帧周期性写入;断连后停止', () => {
+    vi.useFakeTimers()
+    const { route, cleanup } = makeRoutes()
+    const res = fakeRes()
+    const req = fakeReq('GET')
+    route(`${PET_API_PREFIX}/events`)!.handler(req, res as never)
+    vi.advanceTimersByTime(30_000)
+    expect(res.state.body.toString('utf8')).toContain(': ping')
+    req.emit('close')
+    const afterClose = res.state.body.toString('utf8')
+    vi.advanceTimersByTime(60_000)
+    expect(res.state.body.toString('utf8')).toBe(afterClose)
+    vi.useRealTimers()
+    cleanup()
+  })
+
+  it('onStream 钩子注册活跃流的关闭函数', () => {
+    const { route, openStreams, cleanup } = makeRoutes()
+    const res = fakeRes()
+    const req = fakeReq('GET')
+    route(`${PET_API_PREFIX}/events`)!.handler(req, res as never)
+    expect(openStreams.length).toBe(1)
+    expect(typeof openStreams[0]).toBe('function')
+    req.emit('close')
+    // 关闭后再次调用是幂等 no-op（closed 守卫）
+    openStreams[0]()
+    cleanup()
+  })
+
+  it('非 GET 返回 405', () => {
+    const { route, cleanup } = makeRoutes()
+    const res = fakeRes()
+    route(`${PET_API_PREFIX}/events`)!.handler(fakeReq('POST'), res as never)
+    expect(res.state.status).toBe(405)
     cleanup()
   })
 })

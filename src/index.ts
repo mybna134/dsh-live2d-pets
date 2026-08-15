@@ -75,16 +75,27 @@ export function apply(ctx: Context, config: Config): void {
 
   // 设置读写 API：Host 直连 ctx.settings（不走 wire 白名单——dsh-host-apiproxy
   // 只暴露内置 allowlist，第三方 namespace 见 research/settings-tab.md）。
+  // 写完成后通知 PetService，经 SSE 端点推送新配置（ADR-006）。
   const settingsApi: SettingsRoutesApi = {
     view: () => ({ value: resolveConfig(), writable: ctx.settings.writable }),
-    write: (ops: readonly SettingsPathOp[]) => ctx.settings.mutate(NS, ops),
+    write: (ops: readonly SettingsPathOp[]) => ctx.settings.mutate(NS, ops).then(() => {
+      service.notifyConfigChanged()
+    }),
   }
 
   // 路由随插件生命周期注册/清理；配置变更（HMR / settings 热更新）经 resolveConfig 即时反映。
+  // 插件卸载时同时关闭全部活跃 SSE 流（onStream），避免旧流在路由注销后空转心跳。
   ctx.effect(() => {
-    const routes = makePetRoutes({ service, packageRoot: petPackageRoot(import.meta.url), settings: settingsApi })
+    const openStreams = new Set<() => void>()
+    const routes = makePetRoutes({
+      service,
+      packageRoot: petPackageRoot(import.meta.url),
+      settings: settingsApi,
+      onStream: (close) => { openStreams.add(close) },
+    })
     const disposers = routes.map((route) => ctx.webServer.register(route))
     return () => {
+      for (const close of openStreams) close()
       for (const dispose of disposers) dispose()
     }
   }, 'live2d-pet: routes')

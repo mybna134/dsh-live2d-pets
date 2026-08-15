@@ -1,7 +1,7 @@
 /**
- * 宠物 HTTP 路由：浏览器半区通过同源 JSON 端点（/api/live2d-pet/*）与
- * 素材静态路由（/pet-assets/*）通信——官方模式（dsh-pet routes.ts 同款，
- * 见 docs/adr/004）。
+ * 宠物 HTTP 路由：浏览器半区通过同源 JSON 端点（/api/live2d-pet/*）、
+ * SSE 状态推送端点（/api/live2d-pet/events，ADR-006）与素材静态路由
+ * （/pet-assets/*）通信——官方模式（dsh-pet routes.ts 同款，见 docs/adr/004）。
  * @module dsh-live2d-pets/routes
  */
 
@@ -143,10 +143,67 @@ function getPostRoute(
   }
 }
 
-/** 构建完整路由族（API + 素材）供 ctx.webServer.register。 */
-export function makePetRoutes(deps: { service: PetService; packageRoot: string; settings: SettingsRoutesApi }): WebRoute[] {
-  const { service, packageRoot, settings } = deps
+/** SSE 心跳间隔（ms）：保持空闲连接活性，防止被中间层/浏览器回收。 */
+const SSE_HEARTBEAT_MS = 30_000
+
+/**
+ * SSE 状态推送端点（ADR-006）：连接即回发当前快照，之后每次服务变化
+ * （状态/显示/配置）推送新快照。EventSource 断线自动重连（retry 3s），
+ * 重连后服务端立即回发快照，客户端无需补偿拉取。
+ * @param onStream - 路由生命周期钩子：插件卸载时由调用方关闭全部活跃流。
+ */
+function sseStateRoute(
+  path: string,
+  service: PetService,
+  onStream?: (close: () => void) => void,
+): WebRoute {
+  return {
+    kind: 'exact',
+    path,
+    handler: (req: IncomingMessage, res: ServerResponse): void => {
+      if (req.method !== 'GET') {
+        json(res, 405, { ok: false, error: 'method-not-allowed' })
+        return
+      }
+      res.writeHead(200, {
+        'content-type': 'text/event-stream; charset=utf-8',
+        'cache-control': 'no-cache, no-store',
+        connection: 'keep-alive',
+        'x-accel-buffering': 'no',
+      })
+      // 断线后写入会抛错，吞掉避免未处理异常
+      res.on('error', () => {})
+      res.write('retry: 3000\n\n')
+      const send = () => { res.write(`data: ${JSON.stringify(service.snapshot())}\n\n`) }
+      send()
+      const unsubscribe = service.onChange(send)
+      const heartbeat = setInterval(() => { res.write(': ping\n\n') }, SSE_HEARTBEAT_MS)
+      let closed = false
+      const close = () => {
+        if (closed) return
+        closed = true
+        unsubscribe()
+        clearInterval(heartbeat)
+        try { res.end() } catch { /* 连接已关闭 */ }
+      }
+      req.on('close', close)
+      res.on('close', close)
+      onStream?.(close)
+    },
+  }
+}
+
+/** 构建完整路由族（API + SSE + 素材）供 ctx.webServer.register。 */
+export function makePetRoutes(deps: {
+  service: PetService
+  packageRoot: string
+  settings: SettingsRoutesApi
+  /** SSE 活跃流注册钩子：插件卸载时由调用方逐一 close（ADR-006）。 */
+  onStream?: (close: () => void) => void
+}): WebRoute[] {
+  const { service, packageRoot, settings, onStream } = deps
   const apiRoutes: WebRoute[] = [
+    sseStateRoute(`${PET_API_PREFIX}/events`, service, onStream),
     getRoute(`${PET_API_PREFIX}/state`, async () => service.snapshot()),
     getRoute(`${PET_API_PREFIX}/models`, async () => ({
       builtin: listBuiltinPresets(),
