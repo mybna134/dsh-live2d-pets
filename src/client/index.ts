@@ -28,9 +28,9 @@ export const inject = ['slots']
 
 /** 点击/拖动判定阈值（px）。 */
 const DRAG_THRESHOLD = 6
-/** 交互/瞬态状态气泡冷却（ms）。 */
-const BUBBLE_COOLDOWN_MS = 2000
-/** 瞬态气泡显示时长（ms）：到时自动隐藏。 */
+/** 点击互动防抖（ms）：仅挡同一次 pointer 误触双发，不等气泡播完（spec §4）。 */
+const TAP_DEBOUNCE_MS = 80
+/** 瞬态气泡显示时长（ms）：到时自动隐藏或回落阶段文案。 */
 const BUBBLE_DISPLAY_MS = 2500
 /**
  * 默认渲染帧率上限（spec §2/§7）：未封顶时 PIXI ticker 可达 120–140fps，
@@ -165,10 +165,13 @@ function classifyTap(hits: readonly string[]): TapPart | null {
   return 'body'
 }
 
-/** 从台词池随机取一句。 */
-function pickLine(pool: readonly string[]): string | undefined {
+/** 从台词池随机取一句；可选避开上一条（池 ≥2 时，spec §4）。 */
+function pickLine(pool: readonly string[], avoid?: string): string | undefined {
   if (pool.length === 0) return undefined
-  return pool[Math.floor(Math.random() * pool.length)]
+  if (pool.length === 1) return pool[0]
+  const candidates = avoid ? pool.filter((line) => line !== avoid) : pool
+  const list = candidates.length > 0 ? candidates : pool
+  return list[Math.floor(Math.random() * list.length)]
 }
 
 /** JSON 响应读取:非 2xx 抛错——错误响应不得当作合法视图/结果解析。 */
@@ -270,7 +273,11 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
   // 尺寸变更合并：SSE 连发时只落地最后一档，避免主线程串行多次 WebGL resize（实测单次可达数秒）
   let pendingSize: number | null = null
   let sizeRaf = 0
-  let lastBubbleAt = 0
+  let lastTapAt = 0
+  /** 各点击台词池上一次抽中的句子（避开连抽同一句，spec §4）。 */
+  const lastTapLine: Partial<Record<'tapHead' | 'tapLeg' | 'tapArm' | 'tapBody', string>> = {}
+  /** 互动动作世代：连点时作废上一次动作的恢复回调，避免掐掉新动作。 */
+  let interactionGen = 0
   let bubbleHideTimer: number | undefined
   let stageTimers: number[] = []
   let stagedState: PetState | null = null
@@ -330,14 +337,12 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
   }
 
   /**
-   * 瞬态气泡（交互/短状态，spec §3/§4）：冷却防刷屏；到时隐藏——若正处于
-   * 阶段演进状态则回落到当前阶段文案（交互短暂抢占常驻气泡，过后归还）。
+   * 瞬态气泡（交互/短状态，spec §3/§4）：立刻换文案并重置隐藏计时（连点可打断）；
+   * 到时隐藏——若正处于阶段演进状态则回落到当前阶段文案（交互短暂抢占常驻气泡，过后归还）。
    */
   function showBubble(text: string): void {
     if (!bubble) return
-    const now = Date.now()
-    if (now - lastBubbleAt < BUBBLE_COOLDOWN_MS) return
-    lastBubbleAt = now
+    clearBubbleHideTimer()
     setBubbleText(text)
     bubbleHideTimer = window.setTimeout(() => {
       bubbleHideTimer = undefined
@@ -406,7 +411,7 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
       personaDefsVersion = next?.version ?? -1
     }
     // 状态变化时播状态气泡与状态动作（spec §3）：长状态（思考/等审批）走
-    // 阶段演进常驻气泡，短状态气泡瞬态显示；交互气泡走冷却防刷屏。
+    // 阶段演进常驻气泡，短状态气泡瞬态显示；点击互动另走 handleTap（可连点打断）。
     // 动作只在状态变化（及长状态阶段推进）时触发——pixi-live2d-display 的
     // motion() 每次调用都会 stopAllMotions 从头播放,若随状态推送无条件重放,
     // 待机动画永远播不满一个循环、互动动作也会在下次推送被掐断。
@@ -650,14 +655,21 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
   }
   function handleTap(e: PointerEvent): void {
     if (!canvas || !model) return
+    const now = Date.now()
+    if (now - lastTapAt < TAP_DEBOUNCE_MS) return
+    lastTapAt = now
     try {
       const rect = canvas.getBoundingClientRect()
       // hitTest(x, y) 吃画布世界坐标（库内部做模型空间转换），返回命中的区域名数组
       const hits = model.hitTest(e.clientX - rect.left, e.clientY - rect.top)
       const part = classifyTap(hits)
       if (part === null) return
-      const line = pickLine(activeCopy[`tap${part[0].toUpperCase()}${part.slice(1)}` as 'tapHead' | 'tapLeg' | 'tapArm' | 'tapBody'])
-      if (line !== undefined) showBubble(line)
+      const poolKey = `tap${part[0].toUpperCase()}${part.slice(1)}` as 'tapHead' | 'tapLeg' | 'tapArm' | 'tapBody'
+      const line = pickLine(activeCopy[poolKey], lastTapLine[poolKey])
+      if (line !== undefined) {
+        lastTapLine[poolKey] = line
+        showBubble(line)
+      }
       const [first, ...fallbacks] = TAP_PART_MOTIONS[part]
       void playInteractionMotion(first, ...fallbacks)
     } catch {
@@ -667,11 +679,12 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
 
   /**
    * 播放互动动作（摸头/点身体）；动作播完后恢复当前状态动画（spec §4：
-   * 互动动画可打断状态动画，结束后回到状态对应动画）。个别模型动作
+   * 互动动画可打断状态动画与上一次互动，结束后回到状态对应动画）。个别模型动作
    * 不完结（如循环播放）或加载失败时，由 3s 兜底定时器恢复。
    */
   async function playInteractionMotion(name: string, fallback?: string): Promise<void> {
     if (!model) return
+    const gen = ++interactionGen
     let finished: unknown
     try {
       finished = model.motion(name)
@@ -679,7 +692,10 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
       if (fallback !== undefined) return playInteractionMotion(fallback)
       return
     }
-    const restore = () => { if (lastState) playState(lastState) }
+    const restore = () => {
+      if (gen !== interactionGen) return
+      if (lastState) playState(lastState)
+    }
     const failSafe = window.setTimeout(restore, 3000)
     try { await finished as Promise<unknown> } catch { /* 动作异常，直接恢复 */ }
     window.clearTimeout(failSafe)
