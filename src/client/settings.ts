@@ -13,6 +13,9 @@ import { createElement, useCallback, useEffect, useRef, useState } from 'react'
 import type { CSSProperties, ChangeEvent, MouseEvent, ReactNode, ReactElement } from 'react'
 import type { CustomModelEntry } from '../index.ts'
 import type { BuiltinPreset } from '../models.ts'
+import type { CustomPersonaDef } from '../persona-shared.ts'
+import { PERSONAS_TEMPLATE } from '../persona-shared.ts'
+import { builtinPersonaOptions } from './personas.ts'
 
 /** settings namespace 的解析值（与 Host Config 对齐）。 */
 export interface PetSettingsValue {
@@ -21,6 +24,7 @@ export interface PetSettingsValue {
   model: string
   debug: boolean
   customModels: CustomModelEntry[]
+  persona: string
 }
 
 interface SettingsView {
@@ -40,10 +44,13 @@ const DEFAULT_VALUE: PetSettingsValue = {
   model: 'hiyori',
   debug: false,
   customModels: [],
+  persona: 'tsundere',
 }
 
 const SETTINGS_API = '/api/live2d-pet/settings'
 const MODELS_API = '/api/live2d-pet/models'
+const STATE_API = '/api/live2d-pet/state'
+const RELOAD_PERSONAS_API = '/api/live2d-pet/reload-personas'
 
 const rowStyle: CSSProperties = {
   padding: '10px 12px',
@@ -94,6 +101,126 @@ const sectionTitleStyle: CSSProperties = {
   fontSize: 13,
   fontWeight: 600,
   color: '#888',
+}
+
+/** 下拉选项（与设置页其它控件同色板，避免原生 select 的白框/底线）。 */
+interface ThemeSelectOption {
+  id: string
+  name: string
+}
+
+interface ThemeSelectProps {
+  value: string
+  options: ThemeSelectOption[]
+  disabled?: boolean
+  onChange: (id: string) => void
+}
+
+/**
+ * 自绘下拉：原生 select 在 Windows 深色主题下会出焦点白框与 options 底部白线，
+ * UA 弹出层几乎不可主题化，故用同色板菜单替代。
+ */
+function ThemeSelect(props: ThemeSelectProps): ReactElement {
+  const { value, options, disabled, onChange } = props
+  const [open, setOpen] = useState(false)
+  const rootRef = useRef<HTMLDivElement | null>(null)
+  const label = options.find((o) => o.id === value)?.name ?? value
+
+  useEffect(() => {
+    if (!open) return
+    const onDoc = (e: Event) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false)
+    }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
+    document.addEventListener('pointerdown', onDoc)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('pointerdown', onDoc)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [open])
+
+  return createElement('div', {
+    ref: rootRef,
+    style: { position: 'relative', flex: 1, minWidth: 0 },
+  },
+    createElement('button', {
+      type: 'button',
+      disabled: !!disabled,
+      'aria-haspopup': 'listbox',
+      'aria-expanded': open,
+      onClick: () => { if (!disabled) setOpen((v) => !v) },
+      style: {
+        ...inputStyle,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: 8,
+        width: '100%',
+        textAlign: 'left',
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        background: 'rgba(128,128,128,.14)',
+        outline: 'none',
+        boxShadow: 'none',
+        opacity: disabled ? 0.55 : 1,
+      },
+    },
+      createElement('span', {
+        style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+      }, label),
+      createElement('span', { style: { color: '#888', fontSize: 10, flexShrink: 0 } }, open ? '▴' : '▾'),
+    ),
+    open && createElement('div', {
+      role: 'listbox',
+      style: {
+        position: 'absolute',
+        left: 0,
+        right: 0,
+        top: 'calc(100% + 4px)',
+        zIndex: 20,
+        margin: 0,
+        padding: 4,
+        borderRadius: 8,
+        border: '1px solid rgba(128,128,128,.35)',
+        background: '#2a2a2e',
+        color: '#e8e8ec',
+        boxShadow: '0 8px 24px rgba(0,0,0,.45)',
+        maxHeight: 240,
+        overflowY: 'auto',
+      },
+    },
+      options.map((o) => {
+        const selected = o.id === value
+        return createElement('button', {
+          key: o.id,
+          type: 'button',
+          role: 'option',
+          'aria-selected': selected,
+          onClick: () => { onChange(o.id); setOpen(false) },
+          style: {
+            display: 'block',
+            width: '100%',
+            margin: 0,
+            padding: '6px 10px',
+            border: 'none',
+            borderRadius: 6,
+            textAlign: 'left',
+            cursor: 'pointer',
+            fontSize: 13,
+            color: '#e8e8ec',
+            background: selected ? 'rgba(120,170,255,.28)' : 'transparent',
+            outline: 'none',
+          },
+          onMouseEnter: (e: MouseEvent<HTMLButtonElement>) => {
+            if (!selected) e.currentTarget.style.background = 'rgba(128,128,128,.22)'
+          },
+          onMouseLeave: (e: MouseEvent<HTMLButtonElement>) => {
+            e.currentTarget.style.background = selected ? 'rgba(120,170,255,.28)' : 'transparent'
+          },
+        }, o.name)
+      }),
+    ),
+  )
 }
 
 /** 设置路径 op（与 Host settings.mutate 对齐）。 */
@@ -151,7 +278,40 @@ function modelRow(
   )
 }
 
-export function PetSettingsSection(): ReactNode {
+/** 「自定义人设 ↗」直达打开（由插件入口注入；返回是否成功，失败走弹层兜底）。 */
+export interface PetSettingsProps {
+  openPath?: (path: string) => Promise<boolean>
+}
+
+interface PersonaStateView {
+  persona: string
+  customPersonas: CustomPersonaDef[]
+  personasError: string | null
+  personasFile: string
+}
+
+/** 拉取宠物状态（人设区数据源）。 */
+async function loadPersonaState(): Promise<PersonaStateView | null> {
+  try {
+    const response = await fetch(STATE_API)
+    if (!response.ok) return null
+    return await response.json() as PersonaStateView
+  } catch {
+    return null
+  }
+}
+
+/** 写剪贴板（尽力而为）。 */
+async function copyText(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text)
+    return true
+  } catch {
+    return false
+  }
+}
+
+export function PetSettingsSection(props: PetSettingsProps): ReactNode {
   const [state, setState] = useState<SettingsState>({ status: 'loading', writable: false })
   // 最新视图 ref：写入 ops 在出队时按最新状态合成，避免快速操作读到过期闭包
   const stateRef = useRef(state)
@@ -249,6 +409,43 @@ export function PetSettingsSection(): ReactNode {
       ]
       if (current.model === id) ops.push({ op: 'set', path: ['model'], value: fallbackModel })
       return ops
+    })
+  }
+
+  // ---- 人设区（spec §2/§3）：下拉选择 + 重新读取 + 自定义人设入口 ----
+  const [personaState, setPersonaState] = useState<PersonaStateView | null>(null)
+  const [personaNotice, setPersonaNotice] = useState<string | null>(null)
+  const [showPersonaPopover, setShowPersonaPopover] = useState(false)
+  const reloadPersonaState = useCallback(() => {
+    loadPersonaState().then((view) => { if (view) setPersonaState(view) })
+  }, [])
+  useEffect(() => { reloadPersonaState() }, [reloadPersonaState])
+
+  const builtinPersonaList = builtinPersonaOptions()
+  const customPersonaList = personaState?.customPersonas ?? []
+  const activePersona = personaState?.persona ?? value.persona
+
+  const reloadPersonas = () => {
+    setPersonaNotice('读取中…')
+    fetch(RELOAD_PERSONAS_API, { method: 'POST' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: { error?: string | null } | null) => {
+        reloadPersonaState()
+        setPersonaNotice(data?.error ? `已重读：${data.error}` : '已重新读取人设文件')
+      })
+      .catch(() => setPersonaNotice('重新读取失败（Host 不可达）'))
+  }
+
+  const openPersonasFile = () => {
+    const file = personaState?.personasFile
+    if (!file) return
+    const opened = props.openPath?.(file) ?? Promise.resolve(false)
+    opened.then((ok) => {
+      if (ok) {
+        setPersonaNotice('已用系统默认程序打开人设文件')
+      } else {
+        setShowPersonaPopover(true)
+      }
     })
   }
 
@@ -354,7 +551,52 @@ export function PetSettingsSection(): ReactNode {
     ),
   ))
 
-  // 3. 模型列表
+  // 3. 人设（spec §2/§3）：下拉切换（全部台词即时换语气）+ 文件工具行
+  const personaOptions = [
+    ...builtinPersonaList,
+    ...customPersonaList.map((p) => ({ id: p.id, name: p.name ?? p.id })),
+  ]
+  children.push(createElement('div', { key: 'persona', style: rowStyle },
+    createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: personaNotice || personaState?.personasError ? 6 : 0 } },
+      createElement('span', { style: { whiteSpace: 'nowrap' } }, '人设'),
+      createElement(ThemeSelect, {
+        value: activePersona,
+        options: personaOptions,
+        disabled: !writable,
+        onChange: (id: string) => {
+          enqueueWrite(() => [{ op: 'set', path: ['persona'], value: id }])
+        },
+      }),
+      createElement('button', { style: buttonStyle, onClick: reloadPersonas }, '↻ 重新读取'),
+      createElement('button', { style: buttonStyle, onClick: openPersonasFile }, '自定义人设 ↗'),
+    ),
+    (personaState?.personasError || personaNotice) && createElement('div', {
+      key: 'persona-notice',
+      style: { color: personaState?.personasError ? '#b45309' : '#888', fontSize: 12 },
+    },
+      (personaState?.personasError ? `人设文件：${personaState.personasError}` : null) ?? personaNotice,
+    ),
+    showPersonaPopover && createElement('div', {
+      key: 'persona-popover',
+      style: { marginTop: 8, padding: '8px 10px', borderRadius: 8, background: 'rgba(128,128,128,.12)', fontSize: 12, wordBreak: 'break-all' },
+    },
+      createElement('div', null, '无法直接打开，请手动编辑人设文件：'),
+      createElement('div', { style: { margin: '4px 0', color: '#666' } }, personaState?.personasFile ?? ''),
+      createElement('div', { style: { display: 'flex', gap: 6 } },
+        createElement('button', {
+          style: buttonStyle,
+          onClick: () => { void copyText(personaState?.personasFile ?? '').then((ok) => setPersonaNotice(ok ? '已复制文件路径' : '复制失败')) },
+        }, '复制路径'),
+        createElement('button', {
+          style: buttonStyle,
+          onClick: () => { void copyText(PERSONAS_TEMPLATE).then((ok) => setPersonaNotice(ok ? '已复制人设模板（女仆示例）' : '复制失败')) },
+        }, '复制模板'),
+        createElement('button', { style: buttonStyle, onClick: () => setShowPersonaPopover(false) }, '收起'),
+      ),
+    ),
+  ))
+
+  // 4. 模型列表
   children.push(createElement('div', { key: 'models' },
     createElement('div', { style: sectionTitleStyle }, '内置模型（只读）'),
     builtinRows.length > 0 ? builtinRows : createElement('div', { style: { color: '#888', fontSize: 12 } }, '清单加载中…'),
@@ -379,7 +621,7 @@ export function PetSettingsSection(): ReactNode {
     ),
   ))
 
-  // 4. 调试模式（与上方模型添加区留出间距）
+  // 5. 调试模式（与上方模型添加区留出间距）
   children.push(createElement('div', { key: 'debug', style: { ...rowStyle, marginTop: 12 } },
     createElement('label', { style: labelStyle },
       createElement('input', {

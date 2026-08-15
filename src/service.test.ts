@@ -6,7 +6,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { PetService } from './service.ts'
 import type { Config } from './index.ts'
 
-const BASE_CONFIG: Config = { enabled: true, size: 160, model: 'hiyori', debug: false, customModels: [] }
+const BASE_CONFIG: Config = { enabled: true, size: 160, model: 'hiyori', debug: false, customModels: [], persona: 'tsundere' }
 
 function makeHarness(overrides: Partial<Config> = {}) {
   const handlers = new Map<string, Array<(payload?: unknown, next?: () => void) => unknown>>()

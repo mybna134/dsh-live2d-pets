@@ -7,4 +7,5 @@
       name: dsh-live2d-pets
       config:
         model: hiyori
+        persona: tsundere
         debug: false

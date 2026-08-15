@@ -13,6 +13,7 @@ import type {} from '@deepseek-ai/dsh-host-webserver'
 import { PetService } from './service.ts'
 import { makePetRoutes, petPackageRoot, type SettingsRoutesApi } from './routes.ts'
 import type { CustomModelEntry } from './models.ts'
+import { PersonasStore } from './personas.ts'
 
 export { PetService } from './service.ts'
 export type { PetState, PetStateView } from './service.ts'
@@ -40,6 +41,8 @@ export interface Config {
   debug: boolean
   /** 用户自定义模型（设置面板增删改，spec §2/§6）。 */
   customModels: CustomModelEntry[]
+  /** 选中人设 id：内置（tsundere/genki/…）或自定义人设 id（spec §3）。 */
+  persona: string
 }
 
 export const Config: Schema<Config> = Schema.object({
@@ -54,6 +57,7 @@ export const Config: Schema<Config> = Schema.object({
       modelUrl: Schema.string(),
     }),
   ).default([]),
+  persona: Schema.string().default('tsundere'),
 })
 
 /** 依赖服务：webServer（同源路由）、settings（namespace 注册与解析）。 */
@@ -71,7 +75,7 @@ export function apply(ctx: Context, config: Config): void {
     return resolved ?? config
   }
 
-  const service = new PetService(ctx, resolveConfig)
+  const service = new PetService(ctx, resolveConfig, new PersonasStore())
 
   // 设置读写 API：Host 直连 ctx.settings（不走 wire 白名单——dsh-host-apiproxy
   // 只暴露内置 allowlist，第三方 namespace 见 research/settings-tab.md）。

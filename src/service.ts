@@ -19,6 +19,8 @@ import {
   DEFAULT_DISPLAY,
   type PetDisplay,
 } from './persist.ts'
+import { PersonasStore, type PersonasFileView } from './personas.ts'
+import { DEFAULT_PERSONA_ID, type CustomPersonaDef } from './persona-shared.ts'
 
 export type PetState = 'idle' | 'thinking' | 'error' | 'done' | 'waiting'
 
@@ -32,8 +34,16 @@ export interface PetStateView {
     /** 解析后的 .model3.json URL（模型 id → URL，spec §6）。 */
     modelUrl: string | null
     debug: boolean
+    /** 选中人设 id（内置或自定义；spec §3）。 */
+    persona: string
   }
   display: PetDisplay
+  /** 自定义人设原样定义（client 端与内置文案合并出完整台词池）。 */
+  customPersonas: CustomPersonaDef[]
+  /** 人设文件级/条目级问题（设置页内联提示；null 无异常）。 */
+  personasError: string | null
+  /** 人设文件绝对路径（「自定义人设 ↗」openPath / 复制路径用）。 */
+  personasFile: string
   version: number
 }
 
@@ -54,6 +64,7 @@ export class PetService {
   constructor(
     private readonly ctx: Context,
     private readonly getConfig: () => Config,
+    private readonly personasStore?: PersonasStore,
   ) {
     this.display = loadPetPersist()
     // 卸载时清理"完成"保持计时器
@@ -102,9 +113,12 @@ export class PetService {
     }, DONE_HOLD_MS)
   }
 
-  /** 浏览器轮询用的状态快照（配置实时读取 settings 解析值）。 */
+  /** 浏览器轮询用的状态快照（配置实时读取 settings 解析值；人设文件每次现读，spec §2）。 */
   snapshot(): PetStateView {
     const config = this.getConfig()
+    // 无缓存现读：改完文件刷新页面/点「重新读取」即拿到最新（spec §2）
+    const personas: PersonasFileView = this.personasStore?.load()
+      ?? { personas: [], error: null, path: '' }
     return {
       state: this.state,
       agent: this.agent,
@@ -114,10 +128,22 @@ export class PetService {
         model: config.model,
         modelUrl: resolveModelUrl(config.model, config.customModels),
         debug: config.debug,
+        persona: config.persona || DEFAULT_PERSONA_ID,
       },
       display: { ...this.display },
+      customPersonas: personas.personas,
+      personasError: personas.error,
+      personasFile: personas.path,
       version: this.version,
     }
+  }
+
+  /** 重新读取人设文件并推送（设置页「↻ 重新读取」按钮；version 递增触发客户端感知）。 */
+  reloadPersonas(): PersonasFileView {
+    const view = this.personasStore?.load() ?? { personas: [], error: null, path: '' }
+    this.version += 1
+    this.emitChange()
+    return view
   }
 
   /** 用户自定义模型列表（设置面板模型列表的 custom 部分，Host 权威视图）。 */

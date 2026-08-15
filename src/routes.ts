@@ -225,6 +225,11 @@ export function makePetRoutes(deps: {
       return Promise.resolve({ ok: true, display: service.setDisplay(patch) })
     }),
     postRoute(`${PET_API_PREFIX}/reset-display`, () => Promise.resolve({ ok: true, display: service.resetDisplay() })),
+    // 人设文件重读（spec §2「↻ 重新读取」）：现读 JSONC 文件 + SSE 推送，宠物与下拉当场更新
+    postRoute(`${PET_API_PREFIX}/reload-personas`, () => {
+      const view = service.reloadPersonas()
+      return Promise.resolve({ ok: true, personas: view.personas, error: view.error, file: view.path })
+    }),
   ]
 
   const assetRoutes: WebRoute[] = ASSET_FILES.map((file): WebRoute => ({

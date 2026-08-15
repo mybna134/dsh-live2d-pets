@@ -17,21 +17,46 @@ import { createElement, useEffect, useRef } from 'react'
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 import type { PetState, PetStateView } from '../service.ts'
 import { PetSettingsSection } from './settings.ts'
+import { resolvePersonaCopy, BUILTIN_PERSONAS } from './personas.ts'
+import type { CopyTable } from '../persona-shared.ts'
+import { DEFAULT_PERSONA_ID } from '../persona-shared.ts'
 
 /** 注入所需服务。 */
 export const inject = ['slots']
 
 /** 点击/拖动判定阈值（px）。 */
 const DRAG_THRESHOLD = 6
-/** 交互气泡冷却（ms）。 */
+/** 交互/瞬态状态气泡冷却（ms）。 */
 const BUBBLE_COOLDOWN_MS = 2000
-/** 状态气泡文案池（中文活泼卖萌，v0.1 常量内置）。 */
-const STATE_BUBBLES: Record<PetState, string[]> = {
-  idle: ['在呢~', '摸鱼中…'],
-  thinking: ['思考中…', '让我想想'],
-  error: ['出错了，要我帮你看看吗？'],
-  done: ['搞定！'],
-  waiting: ['等你拍板~'],
+/** 瞬态气泡显示时长（ms）：到时自动隐藏。 */
+const BUBBLE_DISPLAY_MS = 2500
+/**
+ * 渲染帧率上限（spec §7）：未封顶时 PIXI ticker 可达 120–140fps，
+ * 长时间挂页会持续占满 GPU/主线程；桌宠动画 30fps 足够。
+ */
+const PET_MAX_FPS = 30
+/**
+ * 阶段演进气泡（spec §3）：思考/等审批为长状态（可达数十秒以上），气泡与
+ * 状态同生命周期**常驻**，文案按入态后耗时推进（afterMs 为距入态偏移），
+ * 阶段切换时重播一次状态动作；状态一变即被新状态表现取代。
+ * 文案取自当前人设台词表（thinking1..3 / waiting1..3，spec §3 人设化台词）。
+ */
+const STAGED_DELAYS: Partial<Record<PetState, number[]>> = {
+  thinking: [0, 15_000, 40_000],
+  waiting: [0, 30_000, 90_000],
+}
+/** 长状态阶段文案池键。 */
+type StageCopyKey = 'thinking1' | 'thinking2' | 'thinking3' | 'waiting1' | 'waiting2' | 'waiting3'
+/** 长状态 → 台词池键（与 STAGED_DELAYS 下标对应）。 */
+const STAGED_COPY_KEYS: Partial<Record<PetState, StageCopyKey[]>> = {
+  thinking: ['thinking1', 'thinking2', 'thinking3'],
+  waiting: ['waiting1', 'waiting2', 'waiting3'],
+}
+/** 短状态（瞬态气泡）→ 台词池键；无键的状态不冒泡。 */
+const TRANSIENT_COPY_KEYS: Partial<Record<PetState, 'idle' | 'error' | 'done'>> = {
+  idle: 'idle',
+  error: 'error',
+  done: 'done',
 }
 /** 状态 → 候选动作组（按模型实际可用性逐个尝试）。 */
 const STATE_MOTIONS: Record<PetState, string[]> = {
@@ -58,6 +83,7 @@ declare const PIXI: {
       addOnce(fn: () => void): unknown
       start(): unknown
       stop(): unknown
+      maxFPS?: number
     }
     renderer: { resize(width: number, height: number): unknown }
     destroy(remove: boolean): void
@@ -94,9 +120,45 @@ interface ModelLike {
   scale: { set(s: number): void }
   position: { set(x: number, y: number): void }
   motion(name: string): unknown
-  hitTest(name: string, x: number, y: number): boolean
-  toLocal(point: unknown): { x: number; y: number }
+  /** pixi-live2d-display 真实签名：hitTest(x, y) 返回**命中的区域名数组**（spec §4）。 */
+  hitTest(x: number, y: number): string[]
   internalModel?: { hitAreas?: Record<string, unknown> }
+}
+
+/** 互动部位（spec §4 四档分部位）。 */
+type TapPart = 'head' | 'leg' | 'arm' | 'body'
+
+/** 命中区域名 → 部位分桶（正则容错：不同模型命名不一）；未匹配的命中区域归身体。 */
+const TAP_PART_MATCHERS: Array<{ part: TapPart; re: RegExp }> = [
+  { part: 'head', re: /head|hair|face|头/i },
+  { part: 'leg', re: /leg|foot|feet|shoe|腿|脚/i },
+  { part: 'arm', re: /arm|hand|手/i },
+]
+
+/** 部位 → 候选动作链（逐个按模型可用性尝试，最终回退 TapBody，spec §4）。 */
+const TAP_PART_MOTIONS: Record<TapPart, string[]> = {
+  head: ['TapHead', 'TapBody'],
+  leg: ['TapLeg', 'TapBody'],
+  arm: ['TapArm', 'TapBody'],
+  body: ['TapBody'],
+}
+
+/**
+ * 按优先级（头 > 腿 > 手 > 身体）把命中区域名列表归类到一个部位；
+ * 空列表（点击落在所有命中区域之外）返回 null 不响应。
+ */
+function classifyTap(hits: readonly string[]): TapPart | null {
+  if (hits.length === 0) return null
+  for (const { part, re } of TAP_PART_MATCHERS) {
+    if (hits.some((name) => re.test(name))) return part
+  }
+  return 'body'
+}
+
+/** 从台词池随机取一句。 */
+function pickLine(pool: readonly string[]): string | undefined {
+  if (pool.length === 0) return undefined
+  return pool[Math.floor(Math.random() * pool.length)]
 }
 
 /** JSON 响应读取:非 2xx 抛错——错误响应不得当作合法视图/结果解析。 */
@@ -164,6 +226,12 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
   // 避免 StrictMode 双挂载 / HMR 重挂载时残留第二份 PIXI app、SSE 订阅与脚本注入。
   let disposed = false
   pushCleanup(() => { disposed = true })
+  // 阶段推进/瞬态气泡计时随卸载清理（HMR/StrictMode 重挂载不残留）
+  pushCleanup(() => { clearStages(); clearBubbleHideTimer() })
+  pushCleanup(() => {
+    if (sizeRaf) { window.cancelAnimationFrame(sizeRaf); sizeRaf = 0 }
+    pendingSize = null
+  })
 
   let box: HTMLDivElement | null = null
   let bubble: HTMLDivElement | null = null
@@ -176,6 +244,7 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
       addOnce(fn: () => void): unknown
       start(): unknown
       stop(): unknown
+      maxFPS?: number
     }
     renderer: { resize(width: number, height: number): unknown }
   } | null = null
@@ -188,7 +257,14 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
   // 若每次 fit 都现读会按 1/s0 累积误差导致越放越大被画布裁剪）
   let baseModelW = 0
   let baseModelH = 0
+  // 尺寸变更合并：SSE 连发时只落地最后一档，避免主线程串行多次 WebGL resize（实测单次可达数秒）
+  let pendingSize: number | null = null
+  let sizeRaf = 0
   let lastBubbleAt = 0
+  let bubbleHideTimer: number | undefined
+  let stageTimers: number[] = []
+  let stagedState: PetState | null = null
+  let stageIndex = 0
   let lastState: PetState | null = null
   let demoState: PetState | null = null
   let view: PetStateView | null = null
@@ -196,6 +272,11 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
   // 渲染开关：插件 enabled（配置）与页面可见性（spec §7）共同决定 ticker 是否运行
   let enabled = true
   let hidden = document.visibilityState !== 'visible'
+  // 当前人设台词表（spec §3：内置常量 or 自定义 base 链合并；人设切换时热更新）
+  let activePersonaId: string = DEFAULT_PERSONA_ID
+  let activeCopy: CopyTable = resolvePersonaCopy(DEFAULT_PERSONA_ID, [])
+  let lastCustomPersonas: PetStateView['customPersonas'] = []
+  let personaDefsVersion = -1
 
   /** 合并 enabled/隐藏/失焦状态，启停渲染循环（spec §7：暂停渲染保留最后画面）。 */
   function syncTicker(): void {
@@ -205,14 +286,74 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
     else { try { app.ticker.stop() } catch { /* 已停止 */ } }
   }
 
+  function clearBubbleHideTimer(): void {
+    if (bubbleHideTimer !== undefined) {
+      window.clearTimeout(bubbleHideTimer)
+      bubbleHideTimer = undefined
+    }
+  }
+
+  /** 显示常驻气泡文案：取消瞬态隐藏计时，气泡保持可见直到被取代。 */
+  function setBubbleText(text: string): void {
+    if (!bubble) return
+    clearBubbleHideTimer()
+    bubble.textContent = text
+    bubble.style.opacity = '1'
+  }
+
+  /** 重绘当前阶段文案（阶段推进/瞬态气泡到时回落/拖拽结束后恢复）。 */
+  function showStageText(): void {
+    if (!stagedState) return
+    const key = STAGED_COPY_KEYS[stagedState]?.[stageIndex]
+    if (!key) return
+    const line = pickLine(activeCopy[key])
+    if (line !== undefined) setBubbleText(line)
+  }
+
+  /**
+   * 瞬态气泡（交互/短状态，spec §3/§4）：冷却防刷屏；到时隐藏——若正处于
+   * 阶段演进状态则回落到当前阶段文案（交互短暂抢占常驻气泡，过后归还）。
+   */
   function showBubble(text: string): void {
     if (!bubble) return
     const now = Date.now()
     if (now - lastBubbleAt < BUBBLE_COOLDOWN_MS) return
     lastBubbleAt = now
-    bubble.textContent = text
-    bubble.style.opacity = '1'
-    window.setTimeout(() => { if (bubble) bubble.style.opacity = '0' }, 2500)
+    setBubbleText(text)
+    bubbleHideTimer = window.setTimeout(() => {
+      bubbleHideTimer = undefined
+      if (stagedState) showStageText()
+      else if (bubble) bubble.style.opacity = '0'
+    }, BUBBLE_DISPLAY_MS)
+  }
+
+  /** 退出阶段演进状态：取消全部阶段计时并复位标记。 */
+  function clearStages(): void {
+    for (const t of stageTimers) window.clearTimeout(t)
+    stageTimers = []
+    stagedState = null
+    stageIndex = 0
+  }
+
+  /** 进入阶段演进状态：立即显示阶段 0 并按偏移调度后续阶段（spec §3）。 */
+  function enterStaged(state: PetState): void {
+    clearStages()
+    const delays = STAGED_DELAYS[state]
+    const keys = STAGED_COPY_KEYS[state]
+    if (!delays || !keys || delays.length === 0) return
+    stagedState = state
+    stageIndex = 0
+    showStageText()
+    for (let i = 1; i < delays.length; i++) {
+      stageTimers.push(window.setTimeout(() => {
+        stageIndex = i
+        // 拖拽中暂停气泡与动作（spec §4），阶段静默推进、松手后恢复新阶段
+        if (!dragging) {
+          showStageText()
+          playState(state)
+        }
+      }, delays[i]))
+    }
   }
 
   function playState(state: PetState): void {
@@ -229,20 +370,43 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
 
   function applyState(next: PetStateView | null): void {
     const state = demoState ?? next?.state ?? 'idle'
-    // 状态变化时播状态气泡与状态动作（spec §3，气泡走冷却防刷屏）。
-    // 动作只在状态变化时触发一次——pixi-live2d-display 的 motion() 每次
-    // 调用都会 stopAllMotions 从头播放,若随状态推送无条件重放,
+    // 人设热更新（spec §3）：persona 或自定义清单变化时重算台词表；
+    // 若正处于长状态，当前阶段气泡立即换新语气重绘（不打断计时节奏）
+    const personaId = next?.config.persona || DEFAULT_PERSONA_ID
+    if (personaId !== activePersonaId || personaDefsVersion !== next?.version) {
+      const customs = next?.customPersonas ?? []
+      const changed = personaId !== activePersonaId
+        || customs.length !== lastCustomPersonas.length
+        || customs.some((p, i) => p !== lastCustomPersonas[i])
+      if (changed) {
+        lastCustomPersonas = customs
+        activePersonaId = personaId
+        activeCopy = resolvePersonaCopy(personaId, customs)
+        if (stagedState && !dragging) showStageText()
+      }
+      personaDefsVersion = next?.version ?? -1
+    }
+    // 状态变化时播状态气泡与状态动作（spec §3）：长状态（思考/等审批）走
+    // 阶段演进常驻气泡，短状态气泡瞬态显示；交互气泡走冷却防刷屏。
+    // 动作只在状态变化（及长状态阶段推进）时触发——pixi-live2d-display 的
+    // motion() 每次调用都会 stopAllMotions 从头播放,若随状态推送无条件重放,
     // 待机动画永远播不满一个循环、互动动作也会在下次推送被掐断。
     if (state !== lastState) {
       lastState = state
-      const lines = STATE_BUBBLES[state]
-      if (lines && lines.length > 0) showBubble(lines[Math.floor(Math.random() * lines.length)])
+      if (STAGED_DELAYS[state]) {
+        enterStaged(state)
+      } else {
+        clearStages()
+        const key = TRANSIENT_COPY_KEYS[state]
+        const line = key ? pickLine(activeCopy[key]) : undefined
+        if (line !== undefined) showBubble(line)
+      }
       playState(state)
     }
     if (debugEl) {
       debugEl.textContent =
         `agent: ${next?.agent ?? '-'}  pet: ${state}  v${next?.version ?? '-'}\n` +
-        `hitAreas: ${hitAreas.join(',') || '-'}\n` +
+        `persona: ${activePersonaId}  hitAreas: ${hitAreas.join(',') || '-'}\n` +
         `pos: ${Math.round(pos.right)},${Math.round(pos.bottom)}  size: ${pos.size}`
     }
   }
@@ -277,8 +441,36 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
     }
   }
 
+  /** 立即应用画布尺寸（仅 renderer.resize，避免先写 canvas.width 清空缓冲造成闪屏）。 */
+  function applySizeNow(nextSize: number): void {
+    if (canvas && app) {
+      const w = nextSize
+      const h = Math.round(nextSize * 1.2)
+      try { app.renderer.resize(w, h) } catch { /* 旧渲染器 */ }
+      pos.size = nextSize
+      if (model) fitModel(nextSize)
+    } else {
+      pos.size = nextSize
+    }
+  }
+
+  /** 合并同帧/连发的尺寸变更：只落地最后一档（防 SSE 风暴卡死主线程）。 */
+  function scheduleSize(nextSize: number): void {
+    if (nextSize === pos.size && pendingSize === null) return
+    pendingSize = nextSize
+    if (sizeRaf) return
+    sizeRaf = window.requestAnimationFrame(() => {
+      sizeRaf = 0
+      const size = pendingSize
+      pendingSize = null
+      if (size !== null && size !== pos.size) applySizeNow(size)
+    })
+  }
+
   /** 销毁当前渲染层（app/canvas/模型引用/静态头像占位）。 */
   function teardownLayer(): void {
+    if (sizeRaf) { window.cancelAnimationFrame(sizeRaf); sizeRaf = 0 }
+    pendingSize = null
     if (app) { try { app.destroy(true) } catch { /* 已销毁 */ } }
     app = null
     model = null
@@ -309,7 +501,15 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
       const M = PIXI.live2d?.Live2DModel
       if (!M) throw new Error('Live2DModel 不可用')
 
-      app = new PIXI.Application({ view: canvas, width: canvas.width, height: canvas.height, backgroundAlpha: 0 })
+      app = new PIXI.Application({
+        view: canvas,
+        width: canvas.width,
+        height: canvas.height,
+        backgroundAlpha: 0,
+        antialias: false,
+        powerPreference: 'low-power',
+      })
+      try { app.ticker.maxFPS = PET_MAX_FPS } catch { /* 旧 ticker */ }
       pushCleanup(() => { try { app?.destroy(true) } catch { /* 已销毁 */ } })
 
       const loaded = await M.from(url, { autoInteract: false }) as ModelLike
@@ -356,7 +556,7 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
       debugEl.style.cssText = 'pointer-events:auto;margin-top:6px;padding:6px 8px;background:rgba(20,20,32,.9);color:#e8e8f0;border-radius:8px;font:11px/1.5 ui-monospace,monospace;white-space:pre-wrap;width:220px'
       const demoRow = document.createElement('div')
       demoRow.style.cssText = 'margin-top:4px;display:flex;gap:4px'
-      for (const st of ['idle', 'thinking', 'done', 'error'] as const) {
+      for (const st of ['idle', 'thinking', 'waiting', 'done', 'error'] as const) {
         const btn = document.createElement('button')
         btn.textContent = st
         btn.onclick = () => { demoState = demoState === st ? null : st; applyState(view) }
@@ -380,17 +580,9 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
     syncTicker()
     // 调试面板
     ensureDebugPanel(cfg.debug)
-    // 尺寸：重设画布 + 模型适配
+    // 尺寸：合并后重设画布 + 模型适配（避免连发 SSE 同步卡死主线程）
     const nextSize = cfg.size
-    if (nextSize !== pos.size) {
-      pos.size = nextSize
-      if (canvas && app && model) {
-        canvas.width = nextSize
-        canvas.height = Math.round(nextSize * 1.2)
-        try { app.renderer.resize(canvas.width, canvas.height) } catch { /* 旧渲染器 */ }
-        fitModel(nextSize)
-      }
-    }
+    if (nextSize !== pos.size) scheduleSize(nextSize)
     // 模型：modelUrl 变化 → 重载
     const nextUrl = cfg.modelUrl || null
     if (nextUrl !== currentModelUrl) {
@@ -427,6 +619,8 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
     if (!down) return
     if (dragging) {
       api.setDisplay({ right: Math.round(pos.right), bottom: Math.round(pos.bottom) }).catch(() => {})
+      // 拖拽中隐藏的常驻气泡恢复当前阶段文案（spec §4：拖拽中暂停、结束恢复）
+      showStageText()
     } else {
       handleTap(e)
     }
@@ -435,21 +629,18 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
   }
   function handleTap(e: PointerEvent): void {
     if (!canvas || !model) return
-    const m = model
     try {
       const rect = canvas.getBoundingClientRect()
-      const local = m.toLocal(new PIXI.Point(e.clientX - rect.left, e.clientY - rect.top))
-      const head = hitAreas.filter((n) => /head/i.test(n)).find((n) => { try { return m.hitTest(n, local.x, local.y) } catch { return false } })
-      const body = hitAreas.filter((n) => !/head/i.test(n)).find((n) => { try { return m.hitTest(n, local.x, local.y) } catch { return false } })
-      if (head) {
-        void playInteractionMotion('TapHead', 'TapBody')
-        showBubble('摸头舒服~')
-      } else if (body) {
-        void playInteractionMotion('TapBody')
-        showBubble(Math.random() < 0.5 ? '嘿嘿~' : '再点我就要生气了哦')
-      }
+      // hitTest(x, y) 吃画布世界坐标（库内部做模型空间转换），返回命中的区域名数组
+      const hits = model.hitTest(e.clientX - rect.left, e.clientY - rect.top)
+      const part = classifyTap(hits)
+      if (part === null) return
+      const line = pickLine(activeCopy[`tap${part[0].toUpperCase()}${part.slice(1)}` as 'tapHead' | 'tapLeg' | 'tapArm' | 'tapBody'])
+      if (line !== undefined) showBubble(line)
+      const [first, ...fallbacks] = TAP_PART_MOTIONS[part]
+      void playInteractionMotion(first, ...fallbacks)
     } catch {
-      // 坐标转换失败：忽略本次点击
+      // 命中检测异常：忽略本次点击
     }
   }
 
@@ -563,9 +754,22 @@ export function apply(ctx: ClientContext): void {
     () => createElement(PetAnchor),
   ))
 
-  // 桌宠配置设置页（settings.section，spec §2）：四项设置，读写经插件自身 API
-  // （/api/live2d-pet/settings，Host 直连 ctx.settings；不走 settingsScope wire，
-  // 见 docs/research/settings-tab.md「设置服务不可用」根因）。
+  // 「自定义人设 ↗」直达打开（spec §2）：优先经 DSH workspaces.openPath 用系统
+  // 默认程序打开人设文件；服务不存在/无权限/打开失败由设置页弹层兜底。
+  const openPath = async (path: string): Promise<boolean> => {
+    try {
+      const workspaces = ctx.get('workspaces') as { openPath?: (p: string) => Promise<void> } | undefined
+      if (!workspaces?.openPath) return false
+      await workspaces.openPath(path)
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  // 桌宠配置设置页（settings.section，spec §2）：开关/尺寸/人设/模型列表/调试，
+  // 读写经插件自身 API（/api/live2d-pet/settings，Host 直连 ctx.settings；
+  // 不走 settingsScope wire，见 docs/research/settings-tab.md「设置服务不可用」根因）。
   slots.inject('settings.section', () => slots.register(
     {
       name: 'settings.section',
@@ -573,6 +777,6 @@ export function apply(ctx: ClientContext): void {
       order: 200,
       label: () => '桌宠配置',
     },
-    () => createElement(PetSettingsSection),
+    () => createElement(PetSettingsSection, { openPath }),
   ))
 }
