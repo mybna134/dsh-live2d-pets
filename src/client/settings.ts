@@ -322,7 +322,12 @@ export function PetSettingsSection(): ReactNode {
         type: 'checkbox',
         checked: !!value.enabled,
         disabled: !writable,
-        onChange: (e: ChangeEvent<HTMLInputElement>) => enqueueWrite(() => [{ op: 'set', path: ['enabled'], value: e.target.checked }]),
+        // 受控 checkbox 的事件期捕获：React 在 onChange 后会同步把 DOM
+        // 复位回上次渲染值，若出队时才读 e.target.checked 永远读到旧值
+        onChange: (e: ChangeEvent<HTMLInputElement>) => {
+          const next = e.target.checked
+          enqueueWrite(() => [{ op: 'set', path: ['enabled'], value: next }])
+        },
       }),
       createElement('span', null, '显示宠物'),
     ),
@@ -381,7 +386,11 @@ export function PetSettingsSection(): ReactNode {
         type: 'checkbox',
         checked: !!value.debug,
         disabled: !writable,
-        onChange: (e: ChangeEvent<HTMLInputElement>) => enqueueWrite(() => [{ op: 'set', path: ['debug'], value: e.target.checked }]),
+        // 同 enabled:事件期捕获,避免受控复位覆盖出队时的读取
+        onChange: (e: ChangeEvent<HTMLInputElement>) => {
+          const next = e.target.checked
+          enqueueWrite(() => [{ op: 'set', path: ['debug'], value: next }])
+        },
       }),
       createElement('span', null, '调试模式（显示调试面板）'),
     ),
