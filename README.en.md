@@ -54,27 +54,18 @@ Custom models: Settings → “Pet config” → “My models”, add a name + `
 
 ### Configuration
 
-Two layers ([research notes](docs/research/settings-tab.md)):
+Open **DSH Settings → “Pet config”**. Changes apply immediately — no restart.
 
-| Layer | Where | Notes |
-|------|------|------|
-| **Settings panel (recommended)** | DSH Settings → “Pet config” | enable / size / FPS / persona / models / developer options; writes `~/.dsh/settings.yaml` user layer, **immediate** |
-| **base** | web profile patch (`~/.dsh/profiles/web/cordis.patch.yml` if `$DSH_HOME` unset) | overrides by id as base; patch **replaces** whole `config` — restate untouched fields |
+<p align="center">
+  <img src="docs/media/settings-pet-config.png" alt="Pet config entry and panel in DSH Settings" width="920" />
+</p>
 
-```yaml
-# cordis.patch.yml example (base layer)
-- id: live2d-pet
-  config:
-    enabled: true # master switch
-    size: 160     # pet size (px), 40–400
-    maxFps: 30    # render FPS: 30 / 60 / 0 (unlimited)
-    model: hiyori # preset id, custom model id, or .model3.json URL
-    persona: tsundere # persona id (built-in or custom)
-    debug: false  # debug panel (dev)
-    showTapZones: false # tap-zone overlay (dev)
-```
-
-> Panel writes override the base layer. Custom models and the selected model also persist in the user layer. Preset list: [`src/presets/presets.json`](src/presets/presets.json). Custom personas: `$DSH_HOME/live2d-pet-personas.json` ([ADR-007](docs/adr/007-personas-plugin-owned-jsonc-file.md)).
+- **Show pet**: on / off
+- **Size**: 40–400px (default 160)
+- **Render FPS**: 30 / 60 / unlimited (default 30)
+- **Personas**: switch built-in or custom tones; “Custom personas ↗” edits `$DSH_HOME/live2d-pet-personas.json`, then hit “↻ Reload”
+- **Models**: pick a curated preset, or add name + `.model3.json` URL under “My models” (optional spatial-tap override)
+- **Developer options**: debug panel, show tap-zone overlay
 
 ### Uninstall
 
