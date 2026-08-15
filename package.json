@@ -20,7 +20,8 @@
     "lib",
     "src",
     "cordis.patch.yml",
-    "assets"
+    "assets",
+    "README.en.md"
   ],
   "license": "MIT",
   "repository": {
