@@ -37,5 +37,8 @@ Thumbs.db
 # Test / coverage
 coverage/
 
+# 本地 CDP 复现目录（含 Chrome profile / 采样日志，勿入库）
+.repro/
+
 # Docs drafts (docs-driven-dev)
 docs/_drafts/
