@@ -8,7 +8,7 @@
 [![GitHub release](https://img.shields.io/github/v/release/cyanfish-x/dsh-live2d-pets)](https://github.com/cyanfish-x/dsh-live2d-pets/releases)
 [![dsh-plugin](https://img.shields.io/badge/topic-dsh--plugin-1f6feb)](https://github.com/topics/dsh-plugin)
 
-DSH（DeepSeek Harness）的 Live2D 桌宠插件：给 Agent 一只**有性格的陪伴**——状态跟着会话走，人设能换，模型可自带。
+给 DeepSeek Harness 请了个看板娘：你思考它歪头，你完成它撒花，还能摸头！
 
 <p align="center">
   <img src="docs/media/hero.jpg" alt="dsh-live2d-pets 主视觉" width="920" />

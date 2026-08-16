@@ -8,7 +8,7 @@ English | [简体中文](README.md)
 [![GitHub release](https://img.shields.io/github/v/release/cyanfish-x/dsh-live2d-pets)](https://github.com/cyanfish-x/dsh-live2d-pets/releases)
 [![dsh-plugin](https://img.shields.io/badge/topic-dsh--plugin-1f6feb)](https://github.com/topics/dsh-plugin)
 
-A Live2D desk-pet plugin for **DeepSeek Harness (DSH)**: a **characterful companion for your agent** — follows session state, switch personas, bring your own model.
+A Live2D desk girl for **DeepSeek Harness (DSH)**: it tilts its head when you think, celebrates when you finish, and you can pet it!
 
 <p align="center">
   <img src="docs/media/hero.jpg" alt="dsh-live2d-pets hero" width="920" />
