@@ -13,6 +13,8 @@ import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import type { PetService } from './service.ts'
 import { listBuiltinPresets } from './models-host.ts'
 import type { CustomModelEntry } from './models.ts'
+import { isLocalModelPath } from './models.ts'
+import { resolveLocalModelFile } from './local-models.ts'
 import type { SettingsPathOp } from '@deepseek-ai/dsh-settings'
 
 /** 设置读写 API（Host 直连 ctx.settings；不走 wire 白名单，见 research/settings-tab.md）。 */
@@ -26,6 +28,9 @@ export const PET_API_PREFIX = '/api/live2d-pet'
 
 /** 浏览器侧素材静态路由基路径（vendor 运行时脚本 + 预设模型）。 */
 export const PET_ASSET_PREFIX = '/pet-assets'
+
+/** 本地模型静态路由基路径（Host 按自定义模型 id 映射到用户本地路径）。 */
+export const PET_LOCAL_MODELS_PREFIX = '/pet-local-models'
 
 /** 随包暴露的素材清单（路径相对于 package 根）。 */
 const ASSET_FILES = [
@@ -194,6 +199,17 @@ function sseStateRoute(
   }
 }
 
+/** 简单 MIME 推断（本地模型资源路由用）。 */
+function mimeForFile(file: string): string {
+  const lower = file.toLowerCase()
+  if (lower.endsWith('.json')) return 'application/json'
+  if (lower.endsWith('.png')) return 'image/png'
+  if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg'
+  if (lower.endsWith('.webp')) return 'image/webp'
+  if (lower.endsWith('.bin') || lower.endsWith('.moc3')) return 'application/octet-stream'
+  return 'application/octet-stream'
+}
+
 /** 构建完整路由族（API + SSE + 素材）供 ctx.webServer.register。 */
 export function makePetRoutes(deps: {
   service: PetService
@@ -243,6 +259,55 @@ export function makePetRoutes(deps: {
     }),
   ]
 
+  const localModelRoute: WebRoute = {
+    kind: 'prefix',
+    path: PET_LOCAL_MODELS_PREFIX,
+    handler: (req: IncomingMessage, res: ServerResponse): Promise<void> => {
+      if (req.method !== 'GET' && req.method !== 'HEAD') {
+        res.writeHead(405)
+        res.end()
+        return Promise.resolve()
+      }
+      const url = new URL(req.url ?? '/', 'http://localhost')
+      const parts = url.pathname.split('/').filter(Boolean)
+      // /pet-local-models/<id>/<relative...>
+      if (parts.length < 3) {
+        res.writeHead(404)
+        res.end()
+        return Promise.resolve()
+      }
+      const id = decodeURIComponent(parts[1])
+      const relativePath = parts.slice(2).map(decodeURIComponent).join('/')
+      const entry = service.listCustomModels().find((c) => c.id === id)
+      if (!entry || !isLocalModelPath(entry.modelUrl)) {
+        res.writeHead(404)
+        res.end()
+        return Promise.resolve()
+      }
+      const file = resolveLocalModelFile(entry.modelUrl, relativePath)
+      if (!file) {
+        res.writeHead(404)
+        res.end()
+        return Promise.resolve()
+      }
+      return readFile(file).then((body) => {
+        res.writeHead(200, {
+          'content-type': mimeForFile(file),
+          'content-length': String(body.byteLength),
+          'cache-control': 'no-cache',
+        })
+        if (req.method === 'HEAD') {
+          res.end()
+          return
+        }
+        res.end(body)
+      }, () => {
+        res.writeHead(404)
+        res.end()
+      })
+    },
+  }
+
   const assetRoutes: WebRoute[] = ASSET_FILES.map((file): WebRoute => ({
     kind: 'exact',
     path: `${PET_ASSET_PREFIX}/${file.name}`,
@@ -270,5 +335,5 @@ export function makePetRoutes(deps: {
     },
   }))
 
-  return [...apiRoutes, ...assetRoutes]
+  return [...apiRoutes, ...assetRoutes, localModelRoute]
 }

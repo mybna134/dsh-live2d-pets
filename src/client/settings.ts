@@ -16,6 +16,7 @@ import type { BuiltinPreset } from '../models.ts'
 import {
   ANIMATION_SLOTS,
   DEFAULT_SPATIAL_TAP,
+  isSupportedModelLocation,
   type AnimationSlot,
   type MotionMap,
 } from '../models.ts'
@@ -979,7 +980,7 @@ export function PetSettingsSection(props: PetSettingsProps): ReactNode {
 
   // 新增模型：打开「动画映射」或 URL 变化时实时解析动作组
   useEffect(() => {
-    if (activeNewPanel !== 'motion' || !/^https?:\/\//.test(newUrl)) return
+    if (activeNewPanel !== 'motion' || !isSupportedModelLocation(newUrl)) return
     let alive = true
     setNewMotionStatus('loading')
     fetchMotionGroups(newUrl)
@@ -998,7 +999,7 @@ export function PetSettingsSection(props: PetSettingsProps): ReactNode {
 
   // 编辑模型：同上
   useEffect(() => {
-    if (activeEditPanel !== 'motion' || !/^https?:\/\//.test(editUrl)) return
+    if (activeEditPanel !== 'motion' || !isSupportedModelLocation(editUrl)) return
     let alive = true
     setEditMotionStatus('loading')
     fetchMotionGroups(editUrl)
@@ -1043,7 +1044,7 @@ export function PetSettingsSection(props: PetSettingsProps): ReactNode {
   const addModel = () => {
     const name = newName.trim()
     const url = newUrl.trim()
-    if (!name || !/^https?:\/\//.test(url)) return
+    if (!name || !isSupportedModelLocation(url)) return
     const spatialTap = overrideFromDraft(newSpatial)
     const animationMap = motionMapFromDraft(newMotionMap)
     const entry: CustomModelEntry = { id: `m${Date.now()}`, name, modelUrl: url }
@@ -1062,7 +1063,7 @@ export function PetSettingsSection(props: PetSettingsProps): ReactNode {
   const saveEdit = (id: string) => {
     const name = editName.trim()
     const url = editUrl.trim()
-    if (!name || !/^https?:\/\//.test(url)) return
+    if (!name || !isSupportedModelLocation(url)) return
     const spatialTap = overrideFromDraft(editSpatial)
     const animationMap = motionMapFromDraft(editMotionMap)
     enqueueCustomWrite((current) => current.map((c) => {
@@ -1168,7 +1169,7 @@ export function PetSettingsSection(props: PetSettingsProps): ReactNode {
           createElement('input', {
             style: { ...inputStyle, flex: 1, minWidth: 120 },
             value: editUrl,
-            placeholder: 'https://…/model3.json',
+            placeholder: 'https://…/model3.json 或 C:/models/...',
             onChange: (e: ChangeEvent<HTMLInputElement>) => setEditUrl(e.target.value),
           }),
           createElement('button', { style: buttonStyle, onClick: () => saveEdit(c.id) }, '保存'),
@@ -1384,7 +1385,7 @@ export function PetSettingsSection(props: PetSettingsProps): ReactNode {
         createElement('input', {
           style: { ...inputStyle, flex: 1, minWidth: 140 },
           value: newUrl,
-          placeholder: 'https://…/xxx.model3.json',
+          placeholder: 'https://…/xxx.model3.json 或 C:/models/...',
           disabled: !writable,
           onChange: (e: ChangeEvent<HTMLInputElement>) => setNewUrl(e.target.value),
         }),

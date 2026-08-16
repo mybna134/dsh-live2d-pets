@@ -103,7 +103,23 @@ export const DEFAULT_SPATIAL_TAP: SpatialTapConfig = {
   armRightMaxNx: 1,
 }
 
-/** 用户自定义模型（名称 + URL + 可选空间分区覆盖 + 可选动画映射，spec §2/§6）。 */
+/** 判断是否为 http(s) 远程模型 URL。 */
+export function isRemoteModelUrl(value: string): boolean {
+  return /^https?:\/\//i.test(value.trim())
+}
+
+/** 判断是否为本地绝对路径（Windows 盘符 / UNC / Unix 根路径）。 */
+export function isLocalModelPath(value: string): boolean {
+  const v = value.trim()
+  return /^[a-zA-Z]:[\\/]/.test(v) || /^\\\\/.test(v) || /^\//.test(v)
+}
+
+/** 自定义模型位置是否受支持（远程 URL 或本地绝对路径）。 */
+export function isSupportedModelLocation(value: string): boolean {
+  return isRemoteModelUrl(value) || isLocalModelPath(value)
+}
+
+/** 用户自定义模型（名称 + URL/本地路径 + 可选空间分区覆盖 + 可选动画映射，spec §2/§6）。 */
 export interface CustomModelEntry {
   id: string
   name: string

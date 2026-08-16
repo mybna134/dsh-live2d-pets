@@ -16,7 +16,7 @@ A Live2D desk girl for **DeepSeek Harness (DSH)**: it tilts its head when you th
 
 ## Features
 
-- **Model loading**: 5 curated presets (Hiyori / Haru / Mao / Mark / Natori) plus custom entries; any `.model3.json` over **https / http**, or a locally reachable model URL; custom models support **animation mapping** to bind native motion groups to pet states / touch interactions
+- **Model loading**: 5 curated presets (Hiyori / Haru / Mao / Mark / Natori) plus custom entries; any `.model3.json` over **https / http**, or an **absolute local path** (e.g. `C:/models/foo/foo.model3.json`) served by the plugin Host through a same-origin route; custom models support **animation mapping** to bind native motion groups to pet states / touch interactions
 - **State mirroring**: the pet reflects agent thinking / idle / error / done / waiting-for-approval (motion + bubbles, SSE push)
 - **Personas**: six built-in tones (tsundere / genki / airhead / kuudere / gentle / yandere); custom personas via a plugin-owned JSONC file with hot reload
 - **Companionship**: part-based tap reactions / mouse-follow (head, eyes and body look toward the pointer) / free drag docking / task-done celebration; when HitAreas are sparse, spatial fallback uses five AABB rectangles
@@ -56,7 +56,7 @@ Open the browser — a default pet (160px) appears at the bottom-right. Default 
 - **Tap interactions**: touching the head / legs / arms / body triggers its own line and motion; when a model has sparse HitAreas, spatial fallback zones are used.
 - **Drag**: hold and drag the pet anywhere, then release to dock it; the position is persisted.
 
-Custom models: Settings → “Pet config” → “My models”, add a name + `.model3.json` URL (CDN, self-hosted static, or local HTTP). Expand **Spatial tap override** to tune the five rectangles (0–1; leave blank for defaults), or expand **Animation mapping** to parse the model’s native motion groups and bind them to states / touch interactions. Pair with developer option **Show tap zones**. Built-in Hiyori ships with a centered preset.
+Custom models: Settings → “Pet config” → “My models”, add a name + `.model3.json` URL (CDN, self-hosted static, local HTTP, or an **absolute local path** such as `C:/models/foo/foo.model3.json`; local paths are served by the plugin Host via `/pet-local-models/...`). Expand **Spatial tap override** to tune the five rectangles (0–1; leave blank for defaults), or expand **Animation mapping** to parse the model’s native motion groups and bind them to states / touch interactions. Pair with developer option **Show tap zones**. Built-in Hiyori ships with a centered preset.
 
 ### Configuration
 

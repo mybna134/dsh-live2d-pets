@@ -10,12 +10,14 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   DEFAULT_MOTION_MAP,
+  isRemoteModelUrl,
   mergeSpatialTap,
   type BuiltinPreset,
   type CustomModelEntry,
   type MotionMap,
   type SpatialTapConfig,
 } from './models.ts'
+import { localModelUrlPath } from './local-models.ts'
 
 /** 简易 JSONC 解析：去掉行注释和块注释（字符串内的注释保留）后 JSON.parse。 */
 function parseJsonc(text: string): unknown {
@@ -102,10 +104,14 @@ export function resolveMotionMap(model: string, customModels: CustomModelEntry[]
  * 未命中返回 null（客户端降级静态头像）。
  */
 export function resolveModelUrl(model: string, customModels: CustomModelEntry[]): string | null {
-  if (/^https?:\/\//.test(model)) return model
+  if (isRemoteModelUrl(model)) return model
   const preset = presetsData.presets.find((p) => p.id === model)
   if (preset) return preset.modelUrl
   const custom = customModels.find((c) => c.id === model)
-  if (custom) return custom.modelUrl
+  if (custom) {
+    // 本地路径：转成 Host 同源虚拟 URL，浏览器通过 /pet-local-models/<id>/... 加载
+    if (isRemoteModelUrl(custom.modelUrl)) return custom.modelUrl
+    return localModelUrlPath(custom.id, custom.modelUrl)
+  }
   return null
 }

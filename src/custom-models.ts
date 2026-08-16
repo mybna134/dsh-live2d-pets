@@ -9,6 +9,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
 import type { CustomModelEntry, MotionMap, SpatialTapOverride } from './models.ts'
+import { isSupportedModelLocation } from './models.ts'
 import { stripJsonComments } from './personas.ts'
 
 /** 自定义模型文件名（$DSH_HOME/live2d-pet 下）。 */
@@ -47,7 +48,7 @@ export function normalizeCustomModel(raw: unknown): CustomModelEntry | null {
   const modelUrl = typeof record.modelUrl === 'string' ? record.modelUrl.trim() : ''
   if (!id || !/^[a-z][a-z0-9_-]*$/i.test(id)) return null
   if (!name) return null
-  if (!/^https?:\/\//.test(modelUrl)) return null
+  if (!isSupportedModelLocation(modelUrl)) return null
   const entry: CustomModelEntry = { id, name, modelUrl }
   if (record.spatialTap && typeof record.spatialTap === 'object') {
     entry.spatialTap = record.spatialTap as SpatialTapOverride
