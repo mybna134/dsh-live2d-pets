@@ -64,6 +64,8 @@ DSH Web GUI 中一只悬浮于角落的 Live2D 桌宠，实时镜像当前会话
 - **拖动（自由位置）**：实时跟随指针，拖拽中暂停气泡与触摸互动；松手后**停留在释放位置**，位置持久化（right/bottom，`persist.ts`）
 - **防刷屏**：点击互动仅保留 **80ms** 防抖（挡同一次 pointer 误触双发）；**不再**等气泡播完才能再点。每次有效点击立刻换一条随机点击台词并**重播**互动动作；随机时在同一池内**避开上一条**（池 ≥2）。交互气泡可短暂抢占长状态常驻气泡，显示结束后回到当前阶段文案
 - 互动动画可打断当前状态动画与上一次互动动画，结束后回到当前状态对应的动画
+- **动作优先级**：待机动作按 `IDLE` 优先级播放；思考/出错/完成/等待等状态动作与四档互动动作均按 `FORCE` 优先级播放。状态动作可立即切换（含长状态阶段重播），互动可打断状态动画与上一次互动
+- **动作期间抑制鼠标跟随**：播放任何非 idle 动作时，宠物先复位正视前方并暂停鼠标跟随，动作真正播完（`motionFinish`）后恢复跟随；避免摸头等动作的头部动画被鼠标转向叠加扭曲
 - **点击台词池**：内置六人设每个部位（tapHead/tapLeg/tapArm/tapBody）约 **4–5** 条，减轻连点重复感；女仆模板彩蛋同步加厚；自定义人设可不覆盖完整条数（沿用 base）
 - **拖动与气泡**：拖拽中隐藏气泡（含长状态常驻气泡，阶段静默推进）；松手后若处于长状态则恢复显示当前阶段文案
 - **鼠标跟随（默认开启，无设置项）**：鼠标在页面任意位置移动时，宠物头部/眼睛/身体平滑看向鼠标（`model.focus(canvasLocalX, canvasLocalY)`，映射 `ParamAngleX/Y/Z` + `ParamEyeBallX/Y` + `ParamBodyAngleX`；身体转动由 `ParamBodyAngleX` 体现，依赖模型自带标准参数）；**拖拽中不更新视线**，避免拖动时头部乱转；鼠标移出页面/窗口后复位正视前方；宠物隐藏（`enabled=false`）或页面失焦/隐藏时不跟随
@@ -122,6 +124,8 @@ DSH Web GUI 中一只悬浮于角落的 Live2D 桌宠，实时镜像当前会话
   - `PetStateView` 携带 `config.persona` + `customPersonas`（原样定义）+ `personasError` + `personasFile`；client 按 base 链本地合并出完整台词表（内置表不重复下发）
   - 命中检测：pixi-live2d-display `hitTest(x, y)` 吃画布世界坐标、返回命中区域名数组（v0.1 曾误用 `(name,x,y)` 恒真值导致全身判为头）；部位按正则分桶 + 优先级 头>腿>手>身体
   - 鼠标跟随：pixi-live2d-display `model.focus(x, y)` 吃 PIXI world space（canvas 本地坐标），内部 `FocusController` 平滑插值并映射 `ParamAngleX/Y/Z` + `ParamEyeBallX/Y` + `ParamBodyAngleX`；复位时直接置 `internalModel.focusController.focus(0, 0, true)`
+  - 动作管理：pixi-live2d-display `MotionPriority`（IDLE=1 / NORMAL=2 / FORCE=3），idle 用 IDLE、状态与互动用 FORCE；重播同一动作前先 `stopAllMotions()`；`motion()` 的 Promise 只代表开始，完成信号统一用 `motionFinish`（ADR-008）
+  - focus 抑制：非 idle 动作播放期间 `focusController.focus(0, 0, true)` 归零 + `pointermove` 门控，`motionFinish` 后恢复跟随（ADR-008）
   - 「自定义人设 ↗」经 client `ctx.get('workspaces').openPath`（DSH host.openPath 能力）打开文件；不可用时弹层兜底（复制路径/模板）
 - 模型清单条目许可可标注（类型 + 链接，NC 标注）；默认模型商用安全；SDK 按 Live2D 官方条款
 - **spike 结果（见 ADR-003）**：WebGL ✅ / DOM·script 注入 ✅ / CDN 脚本加载 ✅ / Host→Client 轮询 ✅ / 模型渲染 ✅ / 动作·表情 ✅ / 触摸命中 ✅；Cubism 5 兼容未验证

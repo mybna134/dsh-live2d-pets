@@ -13,3 +13,4 @@
 | [005](005-pet-visual-top-layer-popover.md) | 宠物视觉层挂载：Popover API（浏览器顶层），回退 body portal | Accepted |
 | [006](006-push-state-sse.md) | Host→Client 状态传输：SSE 推送替代轮询（supersede ADR-004 通信条款） | Accepted |
 | [007](007-personas-plugin-owned-jsonc-file.md) | 自定义人设走插件独有 JSONC 文件（不进 DSH settings 体系） | Accepted |
+| [008](008-motion-priority-and-focus-suppression.md) | Live2D 动作优先级与 focus 抑制规则 | Accepted |

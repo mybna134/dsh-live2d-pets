@@ -8,7 +8,8 @@
  * - agent 状态经 /api/live2d-pet/events SSE 推送（首帧快照 + 变更推送，ADR-006）；
  *   标签页隐藏/窗口失焦暂停渲染循环，恢复时继续（spec §7）
  * - 点击/拖动按 6px 阈值判定；自由位置拖动，松手持久化（spec §4）
- * - 鼠标跟随：document 级 pointermove 调用 model.focus()，头/眼/身体看向鼠标；移出页面复位（spec §4）
+ * - 鼠标跟随：document 级 pointermove 调用 model.focus()，头/眼/身体看向鼠标；移出页面复位；
+ *   非 idle 动作播放期间抑制 focus，避免动作关键帧被鼠标跟随叠加（spec §4）
  * - 配置（enabled/size/maxFps/debug/model）经状态推送运行时应用：开关→显隐+停启渲染、
  *   尺寸→重设画布与模型适配、帧率→ticker.maxFPS、调试→动态面板、模型→按 modelUrl 重载（spec §2/§6/§7）
  * @module dsh-live2d-pets/client
@@ -39,6 +40,14 @@ const BUBBLE_DISPLAY_MS = 2500
  * 长时间挂页会持续占满 GPU/主线程；桌宠动画默认 30fps 足够，用户可在设置中改档。
  */
 const DEFAULT_MAX_FPS = 30
+
+/** pixi-live2d-display MotionPriority（对应库内枚举：NONE=0, IDLE=1, NORMAL=2, FORCE=3）。 */
+const MotionPriority = {
+  IDLE: 1,
+  NORMAL: 2,
+  FORCE: 3,
+} as const
+type MotionPriority = typeof MotionPriority[keyof typeof MotionPriority]
 
 /** 归一化配置帧率档（非法值回落默认 30）。 */
 function normalizeMaxFps(raw: unknown): number {
@@ -131,7 +140,8 @@ interface ModelLike {
   anchor: { set(x: number, y: number): void }
   scale: { set(s: number): void }
   position: { set(x: number, y: number): void }
-  motion(name: string): unknown
+  /** pixi-live2d-display 真实签名：motion(group, index?, priority?)，只传组名时随机播放该组并默认 NORMAL。 */
+  motion(name: string, index?: number, priority?: MotionPriority): Promise<boolean>
   /** pixi-live2d-display 真实签名：focus(x, y) 吃 world space 坐标，内部平滑映射头/眼/身体参数。 */
   focus(x: number, y: number, instant?: boolean): void
   /** pixi-live2d-display 真实签名：hitTest(x, y) 返回**命中的区域名数组**（spec §4）。 */
@@ -141,6 +151,13 @@ interface ModelLike {
   internalModel?: {
     hitAreas?: Record<string, unknown>
     focusController?: { focus(x: number, y: number, instant?: boolean): void }
+    motionManager?: {
+      /** MotionManager 事件：motionFinish 是动作真正播完的信号（motion() 的 Promise 只代表开始）。 */
+      on?(event: 'motionFinish', listener: () => void): unknown
+      off?(event: 'motionFinish', listener: () => void): unknown
+      /** 停掉当前队列并复位 MotionState；重播同一动作前需要先调用。 */
+      stopAllMotions?(): void
+    }
   }
 }
 
@@ -343,8 +360,18 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
   let lastTapAt = 0
   /** 各点击台词池上一次抽中的句子（避开连抽同一句，spec §4）。 */
   const lastTapLine: Partial<Record<'tapHead' | 'tapLeg' | 'tapArm' | 'tapBody', string>> = {}
-  /** 互动动作世代：连点时作废上一次动作的恢复回调，避免掐掉新动作。 */
+  /** 互动动作世代：新互动或新非 idle 状态动作会作废上一次互动的恢复回调。 */
   let interactionGen = 0
+  /** 动作启动世代：任何新动作都会使异步 fallback/旧启动失效，避免被 stopAllMotions 打断后继续启动。 */
+  let motionSeq = 0
+  /** 是否正在播放互动动作（motionFinish 后据此恢复当前状态动作）。 */
+  let interactionActive = false
+  /** 是否抑制鼠标跟随：非 idle 动作播放期间为 true（spec §4）。 */
+  let focusSuppressed = false
+  /** 最近一次全局 pointermove 的 client 坐标；动作结束后用于立即恢复跟随。 */
+  let lastPointerClient: { x: number; y: number } | null = null
+  /** 当前模型 motionManager 的 motionFinish 解绑函数（模型重载/卸载时清理）。 */
+  let detachMotionFinish: (() => void) | null = null
   let bubbleHideTimer: number | undefined
   let stageTimers: number[] = []
   let stagedState: PetState | null = null
@@ -447,16 +474,90 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
     }
   }
 
-  function playState(state: PetState): void {
-    if (!model) return
-    for (const name of STATE_MOTIONS[state] ?? []) {
+  /** 按 client 坐标应用鼠标跟随（model.focus 吃 canvas 本地坐标）。 */
+  function applyFocus(clientX: number, clientY: number): void {
+    if (!model || !canvas) return
+    const rect = canvas.getBoundingClientRect()
+    model.focus(clientX - rect.left, clientY - rect.top)
+  }
+
+  /** 解除非 idle 动作期间的 focus 抑制；若有最近指针位置则立即恢复跟随。 */
+  function releaseFocusSuppression(): void {
+    if (!focusSuppressed) return
+    focusSuppressed = false
+    if (model && lastPointerClient && !dragging && enabled && !hidden) {
+      applyFocus(lastPointerClient.x, lastPointerClient.y)
+    }
+  }
+
+  /**
+   * 按候选动作链启动动作，统一处理优先级、重播前 stopAllMotions、布尔返回值 fallback。
+   * - idle 用 IDLE 优先级；状态/互动用 FORCE（NORMAL 不能打断 NORMAL，无法满足状态立即切换）。
+   * - 非 idle 动作启动时抑制 focus，并等 motionFinish 真正播完后再恢复。
+   */
+  async function startMotionWithPriority(
+    names: readonly string[],
+    priority: MotionPriority,
+    options: { suppressFocus: boolean; isInteraction: boolean },
+  ): Promise<boolean> {
+    if (!model || names.length === 0) return false
+    const seq = ++motionSeq
+    const currentModel = model
+    if (options.suppressFocus) {
+      focusSuppressed = true
+      currentModel.internalModel?.focusController?.focus(0, 0, true)
+    } else {
+      releaseFocusSuppression()
+    }
+    if (options.isInteraction) interactionActive = true
+    // 重播同一动作前必须清 MotionState；否则库会因“同 group+index 已激活”拒绝启动。
+    currentModel.internalModel?.motionManager?.stopAllMotions?.()
+    for (const name of names) {
+      if (seq !== motionSeq || !model) return false
       try {
-        model.motion(name)
-        return
+        const ok = await model.motion(name, undefined, priority)
+        if (seq !== motionSeq || !model) return false
+        if (ok) return true
       } catch {
-        // 尝试下一个候选动作
+        if (seq !== motionSeq || !model) return false
+        // 单个候选失败/返回 false 时继续尝试下一个
       }
     }
+    // 全部候选都失败：清理本次的互动/焦点标记（若期间已被新动作取代则不动）。
+    if (seq === motionSeq) {
+      if (options.isInteraction) interactionActive = false
+      if (options.suppressFocus) releaseFocusSuppression()
+    }
+    return false
+  }
+
+  function playState(state: PetState): void {
+    if (!model) return
+    const names = STATE_MOTIONS[state] ?? []
+    if (names.length === 0) return
+    // 任何状态动作（含回到 idle）都会取代正在播放的互动/旧状态动作
+    interactionGen += 1
+    interactionActive = false
+    const priority = state === 'idle' ? MotionPriority.IDLE : MotionPriority.FORCE
+    void startMotionWithPriority(names, priority, { suppressFocus: state !== 'idle', isInteraction: false })
+  }
+
+  /** MotionManager.motionFinish：动作真正播完。互动结束后恢复当前状态动作并解除 focus 抑制。
+   * 注意该事件在库内部 state.complete()/自动回 idle 之前同步触发，恢复动作需延到微任务，
+   * 避免在 MotionManager.update 中间重入修改 MotionState。 */
+  function handleMotionFinish(): void {
+    const wasInteraction = interactionActive
+    const gen = interactionGen
+    const seq = motionSeq
+    interactionActive = false
+    queueMicrotask(() => {
+      // 若期间已有新动作启动（motionSeq 变化），由新动作接管焦点/恢复，这里不再处理
+      if (seq !== motionSeq) return
+      releaseFocusSuppression()
+      if (wasInteraction && gen === interactionGen && !interactionActive && lastState) {
+        playState(lastState)
+      }
+    })
   }
 
   function applyState(next: PetStateView | null): void {
@@ -479,9 +580,8 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
     }
     // 状态变化时播状态气泡与状态动作（spec §3）：长状态（思考/等审批）走
     // 阶段演进常驻气泡，短状态气泡瞬态显示；点击互动另走 handleTap（可连点打断）。
-    // 动作只在状态变化（及长状态阶段推进）时触发——pixi-live2d-display 的
-    // motion() 每次调用都会 stopAllMotions 从头播放,若随状态推送无条件重放,
-    // 待机动画永远播不满一个循环、互动动作也会在下次推送被掐断。
+    // 动作只在状态变化（及长状态阶段推进）时触发；startMotionWithPriority 会先
+    // stopAllMotions 再按优先级启动，保证状态动作可立即切换、阶段可重播。
     if (state !== lastState) {
       lastState = state
       if (STAGED_DELAYS[state]) {
@@ -560,6 +660,14 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
 
   /** 销毁当前渲染层（app/canvas/模型引用/静态头像占位）。 */
   function teardownLayer(): void {
+    // 作废旧模型的所有动作启动/互动恢复；焦点抑制复位
+    motionSeq += 1
+    interactionGen += 1
+    interactionActive = false
+    focusSuppressed = false
+    lastPointerClient = null
+    detachMotionFinish?.()
+    detachMotionFinish = null
     if (sizeRaf) { window.cancelAnimationFrame(sizeRaf); sizeRaf = 0 }
     pendingSize = null
     stopZoneLoop()
@@ -628,6 +736,13 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
       baseModelH = Number(loaded.height) || 0
       app.stage.addChild(loaded)
       hitAreas = Object.keys(loaded.internalModel?.hitAreas ?? {})
+      // 动作真正播完信号：motion() 的 Promise 在开始时即 resolve，不能作为恢复/解除 focus 的时机
+      const motionManager = loaded.internalModel?.motionManager
+      if (motionManager?.on) {
+        motionManager.on('motionFinish', handleMotionFinish)
+        detachMotionFinish?.()
+        detachMotionFinish = () => motionManager.off?.('motionFinish', handleMotionFinish)
+      }
       fitModel(pos.size)
       // 首帧尺寸未知时延迟适配
       if (!(baseModelW > 0 && baseModelH > 0)) {
@@ -812,18 +927,21 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
 
   // ---- 鼠标跟随（spec §4）：全局 pointermove，头/眼/身体看向鼠标 ----
   function handleGlobalPointerMove(e: PointerEvent): void {
-    // 拖拽中不更新视线，避免拖动时头部乱转；隐藏/失焦也不跟随
-    if (!model || !canvas || dragging || !enabled || hidden) return
-    // model.focus 吃 PIXI world space（canvas 本地坐标），需把 client 坐标减去画布偏移
-    const rect = canvas.getBoundingClientRect()
-    model.focus(e.clientX - rect.left, e.clientY - rect.top)
+    lastPointerClient = { x: e.clientX, y: e.clientY }
+    // 非 idle 动作播放期间抑制 focus，避免动作关键帧被鼠标跟随叠加（spec §4）
+    if (!model || !canvas || dragging || !enabled || hidden || focusSuppressed) return
+    applyFocus(e.clientX, e.clientY)
   }
   function handleGlobalMouseOut(e: MouseEvent): void {
     // 仅当真正离开页面/窗口时复位；元素间移动会冒泡 mouseout，需排除 relatedTarget 非空
     if (e.relatedTarget) return
+    lastPointerClient = null
     if (!model || dragging || !enabled || hidden) return
-    // 复位正视前方：FocusController 吃 [-1,1] 归一化目标，直接归零
-    model.internalModel?.focusController?.focus(0, 0, true)
+    // 非 idle 动作期间 focus 已被归零并抑制，不需要额外复位
+    if (!focusSuppressed) {
+      // 复位正视前方：FocusController 吃 [-1,1] 归一化目标，直接归零
+      model.internalModel?.focusController?.focus(0, 0, true)
+    }
   }
 
   function handleTap(e: PointerEvent): void {
@@ -858,28 +976,18 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
   }
 
   /**
-   * 播放互动动作（摸头/点身体）；动作播完后恢复当前状态动画（spec §4：
-   * 互动动画可打断状态动画与上一次互动，结束后回到状态对应动画）。个别模型动作
-   * 不完结（如循环播放）或加载失败时，由 3s 兜底定时器恢复。
+   * 播放互动动作（摸头/点身体）：FORCE 可打断状态动画与上一次互动；动作真正播完
+   * （motionFinish）后恢复当前状态动画（spec §4）。motion() 的 Promise 只代表开始，
+   * 因此不再用 Promise 完成时间或 3s 兜底来恢复。
    */
-  async function playInteractionMotion(name: string, fallback?: string): Promise<void> {
+  async function playInteractionMotion(first: string, ...fallbacks: string[]): Promise<void> {
     if (!model) return
-    const gen = ++interactionGen
-    let finished: unknown
-    try {
-      finished = model.motion(name)
-    } catch {
-      if (fallback !== undefined) return playInteractionMotion(fallback)
-      return
-    }
-    const restore = () => {
-      if (gen !== interactionGen) return
-      if (lastState) playState(lastState)
-    }
-    const failSafe = window.setTimeout(restore, 3000)
-    try { await finished as Promise<unknown> } catch { /* 动作异常，直接恢复 */ }
-    window.clearTimeout(failSafe)
-    restore()
+    ++interactionGen
+    await startMotionWithPriority(
+      [first, ...fallbacks],
+      MotionPriority.FORCE,
+      { suppressFocus: true, isInteraction: true },
+    )
   }
 
   // ---- 主流程 ----
