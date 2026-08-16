@@ -16,11 +16,11 @@ A Live2D desk-pet plugin for **DeepSeek Harness (DSH)**: a **characterful compan
 
 ## Features
 
-- **Model loading**: 5 curated presets (Hiyori / Haru / Mao / Mark / Natori) plus custom entries; any `.model3.json` over **https / http**, or a locally reachable model URL
+- **Model loading**: 5 curated presets (Hiyori / Haru / Mao / Mark / Natori) plus custom entries; any `.model3.json` over **https / http**, or a locally reachable model URL; custom models support **animation mapping** to bind native motion groups to pet states / touch interactions
 - **State mirroring**: the pet reflects agent thinking / idle / error / done / waiting-for-approval (motion + bubbles, SSE push)
 - **Personas**: six built-in tones (tsundere / genki / airhead / kuudere / gentle / yandere); custom personas via a plugin-owned JSONC file with hot reload
 - **Companionship**: part-based tap reactions / mouse-follow (head, eyes and body look toward the pointer) / free drag docking / task-done celebration; when HitAreas are sparse, spatial fallback uses five AABB rectangles
-- **Settings panel**: DSH Settings → “Pet config” — enable, size, FPS, persona, models, developer options; persisted to `~/.dsh/settings.yaml`, applies immediately
+- **Settings panel**: DSH Settings → “Pet config” — enable, size, FPS, persona, models, developer options; scalar settings are persisted to `~/.dsh/settings.yaml`, while custom personas and custom models live in `~/.dsh/live2d-pet/` plugin-owned JSONC files; applies immediately
 - **Stay out of the way**: bottom-right by default, small size, draggable, hideable, pause rendering when the tab is hidden, FPS cap, static avatar fallback on low end
 
 ## Quick start
@@ -56,7 +56,7 @@ Open the browser — a default pet (160px) appears at the bottom-right. Default 
 - **Tap interactions**: touching the head / legs / arms / body triggers its own line and motion; when a model has sparse HitAreas, spatial fallback zones are used.
 - **Drag**: hold and drag the pet anywhere, then release to dock it; the position is persisted.
 
-Custom models: Settings → “Pet config” → “My models”, add a name + `.model3.json` URL (CDN, self-hosted static, or local HTTP). For odd proportions, expand **Spatial tap override (optional)** and tune the five rectangles (0–1; leave blank for defaults). Pair with developer option **Show tap zones**. Built-in Hiyori ships with a centered preset.
+Custom models: Settings → “Pet config” → “My models”, add a name + `.model3.json` URL (CDN, self-hosted static, or local HTTP). Expand **Spatial tap override** to tune the five rectangles (0–1; leave blank for defaults), or expand **Animation mapping** to parse the model’s native motion groups and bind them to states / touch interactions. Pair with developer option **Show tap zones**. Built-in Hiyori ships with a centered preset.
 
 ### Configuration
 
@@ -71,7 +71,7 @@ Open **DSH Settings → “Pet config”**. Changes apply immediately — no res
 - **Render FPS**: 30 / 60 / unlimited (default 30)
 - **Personas**: switch built-in or custom tones; “Custom personas ↗” edits `$DSH_HOME/live2d-pet/personas.jsonc`, then hit “↻ Reload”
 - **Models**: pick a curated preset, or add name + `.model3.json` URL under “My models” (optional spatial-tap / animation mapping); custom models live in `$DSH_HOME/live2d-pet/custom-models.jsonc`
-- **Developer options**: debug panel, show tap-zone overlay
+- **Developer options**: master toggle (off by default); when enabled, shows the debug panel (with native model animation list preview) and the tap-zone overlay
 
 ### Uninstall
 
@@ -94,7 +94,7 @@ dsh plugin --profile web remove dsh-live2d-pets
 - pixi-live2d-display 0.4.0 + PixiJS 6.5.10 + Cubism Core 4 ([ADR-003](docs/adr/003-spike-results-and-rendering-stack.md))
 - Client renders in DSH Web GUI `shell.overlay` (Popover top layer, [ADR-005](docs/adr/005-pet-visual-top-layer-popover.md)); settings section on `settings.section` ([ADR-002](docs/adr/002-pet-mount-and-state-source.md))
 - State push: Host subscribes to `agent/*` → same-origin SSE `/api/live2d-pet/events` ([ADR-006](docs/adr/006-push-state-sse.md)); pause when tab hidden / blurred
-- Settings: Host `ctx.settings` (`~/.dsh/settings.yaml` over base); transport via plugin API `/api/live2d-pet/settings` (settingsScope wire allowlist limits — [research 3.4/3.5](docs/research/settings-tab.md))
+- Settings: scalar settings via Host `ctx.settings` (`~/.dsh/settings.yaml` over base); custom personas at `~/.dsh/live2d-pet/personas.jsonc`, custom models at `~/.dsh/live2d-pet/custom-models.jsonc` are read/written by the plugin; transport via plugin API `/api/live2d-pet/settings` (settingsScope wire allowlist limits — [research 3.4/3.5](docs/research/settings-tab.md))
 
 ## License
 
