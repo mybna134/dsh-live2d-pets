@@ -636,7 +636,8 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
       debugTextEl.textContent =
         `agent: ${next?.agent ?? '-'}  pet: ${state}  v${next?.version ?? '-'}\n` +
         `persona: ${activePersonaId}  hitAreas: ${hitAreas.join(',') || '-'}\n` +
-        `pos: ${Math.round(pos.right)},${Math.round(pos.bottom)}  size: ${pos.size}`
+        `pos: ${Math.round(pos.right)},${Math.round(pos.bottom)}  size: ${pos.size}\n` +
+        `bounds: ${Math.round(baseModelW)}x${Math.round(baseModelH)}  canvas: ${canvas?.width ?? 0}x${canvas?.height ?? 0}`
     }
   }
 
@@ -657,25 +658,42 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
     fallbackShown = false
   }
 
+  /**
+   * 按“size = canvas 宽度”的规则计算画布尺寸：
+   * 模型宽度撑满 size（留 8px 边距），高度按模型原始宽高比自适应。
+   */
+  function modelCanvasSize(baseW: number, baseH: number, size: number): { width: number; height: number } {
+    if (!(baseW > 0 && baseH > 0)) return { width: size, height: Math.round(size * 1.2) }
+    const scale = (size - 8) / baseW
+    return { width: size, height: Math.max(1, Math.round(baseH * scale + 8)) }
+  }
+
   /** 按当前尺寸重新适配模型（画布已就绪时调用；基准尺寸为 scale=1 时捕获值）。 */
   function fitModel(size: number): void {
     if (!model || !canvas) return
     const w = baseModelW
     const h = baseModelH
     if (w > 0 && h > 0) {
-      const s = Math.min((size - 8) / w, (Math.round(size * 1.2) - 8) / h)
+      const s = (size - 8) / w
       model.scale.set(s)
       model.anchor.set(0.5, 0.5)
       model.position.set(canvas.width / 2, canvas.height / 2)
     }
   }
 
-  /** 立即应用画布尺寸（仅 renderer.resize，避免先写 canvas.width 清空缓冲造成闪屏）。 */
+  /** 立即应用画布尺寸（size 视为 canvas 宽度，高度按模型比例自适应）。 */
   function applySizeNow(nextSize: number): void {
     if (canvas && app) {
-      const w = nextSize
-      const h = Math.round(nextSize * 1.2)
-      try { app.renderer.resize(w, h) } catch { /* 旧渲染器 */ }
+      const canvasSize = modelCanvasSize(baseModelW, baseModelH, nextSize)
+      canvas.width = canvasSize.width
+      canvas.height = canvasSize.height
+      try { app.renderer.resize(canvasSize.width, canvasSize.height) } catch { /* 旧渲染器 */ }
+      if (zoneOverlay) {
+        zoneOverlay.width = canvasSize.width
+        zoneOverlay.height = canvasSize.height
+        zoneOverlay.style.width = `${canvasSize.width}px`
+        zoneOverlay.style.height = `${canvasSize.height}px`
+      }
       pos.size = nextSize
       syncDebugPanelWidth()
       if (model) fitModel(nextSize)
@@ -779,11 +797,30 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
         return
       }
       model = loaded
-      // 基础尺寸：scale=1 时捕获（Pixi Container.width 含当前 scale，必须固定基准）
+      // 基础尺寸：优先用模型实际包围盒（getBounds），拿不到再退回 loaded.width/height
       baseModelW = Number(loaded.width) || 0
       baseModelH = Number(loaded.height) || 0
       app.stage.addChild(loaded)
+      try {
+        const b = loaded.getBounds?.()
+        if (b && b.width > 0 && b.height > 0) {
+          baseModelW = b.width
+          baseModelH = b.height
+        }
+      } catch { /* 包围盒不可用则保留 loaded.width/height */ }
       hitAreas = Object.keys(loaded.internalModel?.hitAreas ?? {})
+      // 根据模型原始宽高自适应 canvas（size 视为 canvas 宽度）
+      const canvasSize = modelCanvasSize(baseModelW, baseModelH, pos.size)
+      canvas.width = canvasSize.width
+      canvas.height = canvasSize.height
+      try { app.renderer.resize(canvasSize.width, canvasSize.height) } catch { /* 旧渲染器 */ }
+      if (zoneOverlay) {
+        zoneOverlay.width = canvasSize.width
+        zoneOverlay.height = canvasSize.height
+        zoneOverlay.style.width = `${canvasSize.width}px`
+        zoneOverlay.style.height = `${canvasSize.height}px`
+      }
+      syncDebugPanelWidth()
       // 动作真正播完信号：motion() 的 Promise 在开始时即 resolve，不能作为恢复/解除 focus 的时机
       const motionManager = loaded.internalModel?.motionManager
       if (motionManager?.on) {
