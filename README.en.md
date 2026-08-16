@@ -8,7 +8,7 @@ English | [简体中文](README.md)
 [![GitHub release](https://img.shields.io/github/v/release/cyanfish-x/dsh-live2d-pets)](https://github.com/cyanfish-x/dsh-live2d-pets/releases)
 [![dsh-plugin](https://img.shields.io/badge/topic-dsh--plugin-1f6feb)](https://github.com/topics/dsh-plugin)
 
-A Live2D desk-pet plugin for **DeepSeek Harness (DSH)**: **load Live2D models from any external URL or reachable local model path**.
+A Live2D desk-pet plugin for **DeepSeek Harness (DSH)**: a **characterful companion for your agent** — follows session state, switch personas, bring your own model.
 
 <p align="center">
   <img src="docs/media/hero.jpg" alt="dsh-live2d-pets hero" width="920" />
@@ -19,7 +19,7 @@ A Live2D desk-pet plugin for **DeepSeek Harness (DSH)**: **load Live2D models fr
 - **Model loading**: 5 curated presets (Hiyori / Haru / Mao / Mark / Natori) plus custom entries; any `.model3.json` over **https / http**, or a locally reachable model URL
 - **State mirroring**: the pet reflects agent thinking / idle / error / done / waiting-for-approval (motion + bubbles, SSE push)
 - **Personas**: six built-in tones (tsundere / genki / airhead / kuudere / gentle / yandere); custom personas via a plugin-owned JSONC file with hot reload
-- **Companionship**: part-based tap reactions / free drag docking / task-done celebration; when HitAreas are sparse, spatial fallback uses five AABB rectangles
+- **Companionship**: part-based tap reactions / mouse-follow (head, eyes and body look toward the pointer) / free drag docking / task-done celebration; when HitAreas are sparse, spatial fallback uses five AABB rectangles
 - **Settings panel**: DSH Settings → “Pet config” — enable, size, FPS, persona, models, developer options; persisted to `~/.dsh/settings.yaml`, applies immediately
 - **Stay out of the way**: bottom-right by default, small size, draggable, hideable, pause rendering when the tab is hidden, FPS cap, static avatar fallback on low end
 

@@ -66,6 +66,7 @@ DSH Web GUI 中一只悬浮于角落的 Live2D 桌宠，实时镜像当前会话
 - 互动动画可打断当前状态动画与上一次互动动画，结束后回到当前状态对应的动画
 - **点击台词池**：内置六人设每个部位（tapHead/tapLeg/tapArm/tapBody）约 **4–5** 条，减轻连点重复感；女仆模板彩蛋同步加厚；自定义人设可不覆盖完整条数（沿用 base）
 - **拖动与气泡**：拖拽中隐藏气泡（含长状态常驻气泡，阶段静默推进）；松手后若处于长状态则恢复显示当前阶段文案
+- **鼠标跟随（默认开启，无设置项）**：鼠标在页面任意位置移动时，宠物头部/眼睛/身体平滑看向鼠标（`model.focus(canvasLocalX, canvasLocalY)`，映射 `ParamAngleX/Y/Z` + `ParamEyeBallX/Y` + `ParamBodyAngleX`；身体转动由 `ParamBodyAngleX` 体现，依赖模型自带标准参数）；**拖拽中不更新视线**，避免拖动时头部乱转；鼠标移出页面/窗口后复位正视前方；宠物隐藏（`enabled=false`）或页面失焦/隐藏时不跟随
 
 ## 5. 任务完成庆祝
 
@@ -98,6 +99,7 @@ DSH Web GUI 中一只悬浮于角落的 Live2D 桌宠，实时镜像当前会话
 - [ ] 长思考（>40s）期间气泡常驻且文案按阶段推进两轮；审批等待同理；状态切换时气泡立即切换为新状态表现
 - [ ] 思考中点击宠物：交互气泡短暂抢占，结束后回到当前阶段文案；拖拽中气泡隐藏、松手恢复
 - [ ] 摸头/摸腿/摸手/摸身体各自触发对应文案与动作（有命名 HitArea 时按名；仅 Body 等不足模型按包围盒空间分档；无命中且在盒外不响应）；连点可立刻换台词+重播动作（仅 80ms 防抖；随机避开上一条）
+- [ ] 鼠标在页面任意位置移动时宠物头/眼/身体平滑跟随；拖拽中不跟随；鼠标移出页面后复位正视前方；隐藏宠物后不跟随
 - [ ] 完成庆祝动画在任务结束后出现并回到空闲态
 - [ ] 模型清单条目许可信息可见（类型 + 链接，NC 有标注）；默认模型（hiyori）可加载；5 条内置条目均可选中加载；加载失败显示静态头像
 - [ ] 标签页隐藏后渲染暂停；WebGL 不可用时为静态头像
@@ -119,6 +121,7 @@ DSH Web GUI 中一只悬浮于角落的 Live2D 桌宠，实时镜像当前会话
   - Host `PersonasStore` 每次快照**现读**该文件（无缓存：刷新页面即生效）；`POST /api/live2d-pet/reload-personas` 重读 + version bump + SSE 推送（「↻ 重新读取」按钮）
   - `PetStateView` 携带 `config.persona` + `customPersonas`（原样定义）+ `personasError` + `personasFile`；client 按 base 链本地合并出完整台词表（内置表不重复下发）
   - 命中检测：pixi-live2d-display `hitTest(x, y)` 吃画布世界坐标、返回命中区域名数组（v0.1 曾误用 `(name,x,y)` 恒真值导致全身判为头）；部位按正则分桶 + 优先级 头>腿>手>身体
+  - 鼠标跟随：pixi-live2d-display `model.focus(x, y)` 吃 PIXI world space（canvas 本地坐标），内部 `FocusController` 平滑插值并映射 `ParamAngleX/Y/Z` + `ParamEyeBallX/Y` + `ParamBodyAngleX`；复位时直接置 `internalModel.focusController.focus(0, 0, true)`
   - 「自定义人设 ↗」经 client `ctx.get('workspaces').openPath`（DSH host.openPath 能力）打开文件；不可用时弹层兜底（复制路径/模板）
 - 模型清单条目许可可标注（类型 + 链接，NC 标注）；默认模型商用安全；SDK 按 Live2D 官方条款
 - **spike 结果（见 ADR-003）**：WebGL ✅ / DOM·script 注入 ✅ / CDN 脚本加载 ✅ / Host→Client 轮询 ✅ / 模型渲染 ✅ / 动作·表情 ✅ / 触摸命中 ✅；Cubism 5 兼容未验证

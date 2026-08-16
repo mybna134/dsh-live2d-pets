@@ -8,6 +8,7 @@
  * - agent 状态经 /api/live2d-pet/events SSE 推送（首帧快照 + 变更推送，ADR-006）；
  *   标签页隐藏/窗口失焦暂停渲染循环，恢复时继续（spec §7）
  * - 点击/拖动按 6px 阈值判定；自由位置拖动，松手持久化（spec §4）
+ * - 鼠标跟随：document 级 pointermove 调用 model.focus()，头/眼/身体看向鼠标；移出页面复位（spec §4）
  * - 配置（enabled/size/maxFps/debug/model）经状态推送运行时应用：开关→显隐+停启渲染、
  *   尺寸→重设画布与模型适配、帧率→ticker.maxFPS、调试→动态面板、模型→按 modelUrl 重载（spec §2/§6/§7）
  * @module dsh-live2d-pets/client
@@ -131,11 +132,16 @@ interface ModelLike {
   scale: { set(s: number): void }
   position: { set(x: number, y: number): void }
   motion(name: string): unknown
+  /** pixi-live2d-display 真实签名：focus(x, y) 吃 world space 坐标，内部平滑映射头/眼/身体参数。 */
+  focus(x: number, y: number, instant?: boolean): void
   /** pixi-live2d-display 真实签名：hitTest(x, y) 返回**命中的区域名数组**（spec §4）。 */
   hitTest(x: number, y: number): string[]
   /** 模型在舞台/画布坐标下的包围盒（空间分档回退用）。 */
   getBounds?: () => { x: number; y: number; width: number; height: number }
-  internalModel?: { hitAreas?: Record<string, unknown> }
+  internalModel?: {
+    hitAreas?: Record<string, unknown>
+    focusController?: { focus(x: number, y: number, instant?: boolean): void }
+  }
 }
 
 /** 互动部位（spec §4 四档分部位）。 */
@@ -803,6 +809,23 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
     down = null
     dragging = false
   }
+
+  // ---- 鼠标跟随（spec §4）：全局 pointermove，头/眼/身体看向鼠标 ----
+  function handleGlobalPointerMove(e: PointerEvent): void {
+    // 拖拽中不更新视线，避免拖动时头部乱转；隐藏/失焦也不跟随
+    if (!model || !canvas || dragging || !enabled || hidden) return
+    // model.focus 吃 PIXI world space（canvas 本地坐标），需把 client 坐标减去画布偏移
+    const rect = canvas.getBoundingClientRect()
+    model.focus(e.clientX - rect.left, e.clientY - rect.top)
+  }
+  function handleGlobalMouseOut(e: MouseEvent): void {
+    // 仅当真正离开页面/窗口时复位；元素间移动会冒泡 mouseout，需排除 relatedTarget 非空
+    if (e.relatedTarget) return
+    if (!model || dragging || !enabled || hidden) return
+    // 复位正视前方：FocusController 吃 [-1,1] 归一化目标，直接归零
+    model.internalModel?.focusController?.focus(0, 0, true)
+  }
+
   function handleTap(e: PointerEvent): void {
     if (!canvas || !model) return
     const now = Date.now()
@@ -894,6 +917,17 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
       currentModelUrl = initialUrl
       await loadModelLayer(initialUrl)
       if (disposed) return
+
+      // 4.1 全局鼠标跟随（spec §4）：页面任意位置移动→头/眼/身体看向鼠标；
+      //     鼠标移出页面→复位正视前方。监听挂在 document 上，模型重载时无需重绑。
+      const onGlobalPointerMove = handleGlobalPointerMove
+      const onGlobalMouseOut = handleGlobalMouseOut
+      document.addEventListener('pointermove', onGlobalPointerMove, { passive: true })
+      document.addEventListener('mouseout', onGlobalMouseOut)
+      pushCleanup(() => {
+        document.removeEventListener('pointermove', onGlobalPointerMove)
+        document.removeEventListener('mouseout', onGlobalMouseOut)
+      })
 
       // 5. 状态订阅（SSE 推送，ADR-006）：替代 v0.1 的 800ms 轮询。
       //    断线由 EventSource 自动重连，重连后首帧即全量快照，无需补偿拉取。

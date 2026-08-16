@@ -8,7 +8,7 @@
 [![GitHub release](https://img.shields.io/github/v/release/cyanfish-x/dsh-live2d-pets)](https://github.com/cyanfish-x/dsh-live2d-pets/releases)
 [![dsh-plugin](https://img.shields.io/badge/topic-dsh--plugin-1f6feb)](https://github.com/topics/dsh-plugin)
 
-DSH（DeepSeek Harness）的 Live2D 桌宠插件：**支持任意外部 URL 或本地模型地址加载 Live2D 模型**。
+DSH（DeepSeek Harness）的 Live2D 桌宠插件：给 Agent 一只**有性格的陪伴**——状态跟着会话走，人设能换，模型可自带。
 
 <p align="center">
   <img src="docs/media/hero.jpg" alt="dsh-live2d-pets 主视觉" width="920" />
@@ -19,7 +19,7 @@ DSH（DeepSeek Harness）的 Live2D 桌宠插件：**支持任意外部 URL 或�
 - **模型加载**：内置 5 条策展模型（Hiyori / Haru / Mao / Mark / Natori）+ 自定义条目；可用任意 `.model3.json` 的 **https / http URL**，或本机可达的本地模型地址
 - **状态镜像**：宠物实时反映 agent 思考 / 空闲 / 出错 / 完成 / 等审批（动画 + 气泡，SSE 推送）
 - **人设台词**：内置六种人设（傲娇 / 元气 / 天然呆 / 三无 / 温柔治愈 / 病娇），可在插件独有 JSONC 中自定义并热切换
-- **互动陪伴**：分部位触摸反应 / 拖动停靠，任务完成庆祝；HitArea 不足时按包围盒五矩形空间回退分档
+- **互动陪伴**：分部位触摸反应 / 鼠标跟随（头、眼、身体看向鼠标）/ 拖动停靠，任务完成庆祝；HitArea 不足时按包围盒五矩形空间回退分档
 - **桌宠配置设置面板**：DSH 设置 →「桌宠配置」，开关 / 尺寸 / 渲染帧率 / 人设 / 模型列表 / 开发者选项；写入 `~/.dsh/settings.yaml`，即时生效
 - **不打扰**：默认右下角、小尺寸、可拖动、可隐藏、标签页隐藏暂停渲染、限帧渲染、低配降级静态头像
 
