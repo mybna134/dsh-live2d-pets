@@ -1,7 +1,7 @@
 /**
  * 人设共享层（Host 与 client 两半区共用，纯常量与类型，零平台依赖）。
  * - CopyTable：一整套台词池（13 池：3 短状态 + 思考/等审批各 3 阶段 + 4 部位互动）
- * - CustomPersonaDef：$DSH_HOME/live2d-pet-personas.json 里的自定义人设条目
+ * - CustomPersonaDef：$DSH_HOME/live2d-pet/personas.jsonc 里的自定义人设条目
  * - PERSONAS_TEMPLATE：首次落地到上述文件的内容（JSONC，含注释版女仆彩蛋）
  * @module dsh-live2d-pets/persona-shared
  */
@@ -43,7 +43,7 @@ export type BuiltinPersonaId = typeof BUILTIN_PERSONA_IDS[number]
 /** 默认人设 id。 */
 export const DEFAULT_PERSONA_ID: BuiltinPersonaId = 'tsundere'
 
-/** 自定义人设条目（live2d-pet-personas.json）。 */
+/** 自定义人设条目（personas.jsonc）。 */
 export interface CustomPersonaDef {
   id: string
   /** 设置页下拉显示名（缺省用 id）。 */
@@ -56,7 +56,7 @@ export interface CustomPersonaDef {
 
 /**
  * 自定义人设文件模板（JSONC）：首次启动原样落地到
- * $DSH_HOME/live2d-pet-personas.json；此后插件只读不写，注释永存。
+ * $DSH_HOME/live2d-pet/personas.jsonc；此后插件只读不写，注释永存。
  * 女仆人设以注释形态预置——取消注释、点「重新读取」即得（彩蛋）。
  */
 export const PERSONAS_TEMPLATE = `{

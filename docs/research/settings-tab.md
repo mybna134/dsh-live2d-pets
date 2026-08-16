@@ -1,7 +1,7 @@
 # Research: 将 dsh-live2d-pets 配置接入 DSH 设置面板（开一个 tab）
 
 > 调研报告（Research），非决策记录。结论基于 DSH 官方包（已装版本 0.1.0-rc.6）的 README、类型契约与源码；官方仓库 docs 链接见文末。
-> 状态：**范围已确认**（2026-08，interview-me 结论）——四项设置（开关/尺寸滑杆/模型列表/调试模式），其余移除；模型列表 = 内置 presets.json 只读 + 自定义模型可增删改（名称 + URL），持久化到 settings 用户层。已同步 `docs/intent/live2d-pet-plugin.md` 与 `docs/spec/live2d-pet-v01.md`（§2/§4/§6/§8/§9/§10）。**实现进行中**：v0.1.2 已按 §5 落地，设置传输经 §3.5 方案 B（插件自身 API，因 §3.4 wire 白名单限制）；待 DSH 落地插件自助暴露后迁移回 settingsScope wire。
+> 状态：**范围已确认**（2026-08，interview-me 结论）——四项设置（开关/尺寸滑杆/模型列表/调试模式），其余移除；模型列表 = 内置 presets.jsonc 只读 + 自定义模型可增删改（名称 + URL），持久化到 settings 用户层。已同步 `docs/intent/live2d-pet-plugin.md` 与 `docs/spec/live2d-pet-v01.md`（§2/§4/§6/§8/§9/§10）。**实现进行中**：v0.1.2 已按 §5 落地，设置传输经 §3.5 方案 B（插件自身 API，因 §3.4 wire 白名单限制）；待 DSH 落地插件自助暴露后迁移回 settingsScope wire。
 
 ## 1. 结论摘要
 

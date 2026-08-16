@@ -1,13 +1,13 @@
 /**
- * 自定义人设文件（$DSH_HOME/live2d-pet-personas.json，JSONC）：
+ * 自定义人设文件（$DSH_HOME/live2d-pet/personas.jsonc，JSONC）：
  * 首次启动原样落地模板（此后只读不写）、按需现读解析（无缓存——
  * 刷新页面/点「重新读取」即生效）、解析失败保留上一份好结果。
  * 自定义人设零接触 DSH settings yaml 体系（插件独有文件，ADR-007）。
  * @module dsh-live2d-pets/personas
  */
 
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
 import {
   COPY_KEYS,
@@ -17,8 +17,8 @@ import {
   type CustomPersonaDef,
 } from './persona-shared.ts'
 
-/** 人设文件名（$DSH_HOME 下）。 */
-export const PERSONAS_FILENAME = 'live2d-pet-personas.json'
+/** 人设文件名（$DSH_HOME/live2d-pet 下）。 */
+export const PERSONAS_FILENAME = 'personas.jsonc'
 
 /** 人设文件读取结果。 */
 export interface PersonasFileView {
@@ -33,6 +33,11 @@ export interface PersonasFileView {
 /** DSH home 目录（与 persist.ts 同一规则）。 */
 function petHomeDir(): string {
   return process.env.DSH_HOME ?? join(homedir(), '.dsh')
+}
+
+/** 插件私有数据目录：$DSH_HOME/live2d-pet。 */
+function petDataDir(): string {
+  return join(petHomeDir(), 'live2d-pet')
 }
 
 /**
@@ -135,7 +140,19 @@ export class PersonasStore {
   private lastError: string | null = null
 
   constructor(path?: string) {
-    this.path = path ?? join(petHomeDir(), PERSONAS_FILENAME)
+    this.path = path ?? join(petDataDir(), PERSONAS_FILENAME)
+    try {
+      mkdirSync(dirname(this.path), { recursive: true })
+    } catch {
+      // 目录创建失败：后续读写会报错，按空清单处理
+    }
+    // 旧路径迁移：$DSH_HOME/live2d-pet-personas.json → $DSH_HOME/live2d-pet/personas.jsonc
+    const legacyPath = join(petHomeDir(), 'live2d-pet-personas.json')
+    try {
+      if (!existsSync(this.path) && existsSync(legacyPath)) copyFileSync(legacyPath, this.path)
+    } catch {
+      // 迁移失败不阻塞：仍按新路径空模板处理
+    }
     // 首次落地：不存在才写模板；此后本插件绝不写此文件（注释永存）
     try {
       if (!existsSync(this.path)) writeFileSync(this.path, PERSONAS_TEMPLATE, 'utf8')

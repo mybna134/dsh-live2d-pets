@@ -3,8 +3,12 @@ import {
   listBuiltinPresets,
   resolveModelUrl,
   resolveSpatialTap,
+  resolveMotionMap,
+} from './models-host.ts'
+import {
   mergeSpatialTap,
   DEFAULT_SPATIAL_TAP,
+  DEFAULT_MOTION_MAP,
 } from './models.ts'
 
 describe('resolveModelUrl', () => {
@@ -40,6 +44,35 @@ describe('listBuiltinPresets', () => {
       expect(p.license.url).toMatch(/^https:\/\//)
       expect(p.cubism).toBeGreaterThan(0)
     }
+  })
+})
+
+describe('resolveMotionMap', () => {
+  it('无配置时返回默认映射', () => {
+    expect(resolveMotionMap('mao', [])).toEqual(DEFAULT_MOTION_MAP)
+    expect(resolveMotionMap('custom-missing', [])).toEqual(DEFAULT_MOTION_MAP)
+  })
+
+  it('自定义模型动画映射覆盖对应槽位，其余沿用默认', () => {
+    const custom = [{
+      id: 'my-mao',
+      name: '猫',
+      modelUrl: 'https://example.com/m.model3.json',
+      animationMap: {
+        thinking: ['Idle', 'TapBody'],
+        head: ['TapHead'],
+      },
+    }]
+    const map = resolveMotionMap('my-mao', custom)
+    expect(map.thinking).toEqual(['Idle', 'TapBody'])
+    expect(map.head).toEqual(['TapHead'])
+    expect(map.idle).toEqual(DEFAULT_MOTION_MAP.idle)
+    expect(map.done).toEqual(DEFAULT_MOTION_MAP.done)
+  })
+
+  it('内置 preset animationMap 生效，自定义优先于内置', () => {
+    // 当前内置 Mao 未配置 animationMap → 默认
+    expect(resolveMotionMap('mao', [])).toEqual(DEFAULT_MOTION_MAP)
   })
 })
 

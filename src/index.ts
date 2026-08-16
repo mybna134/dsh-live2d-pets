@@ -13,7 +13,9 @@ import type {} from '@deepseek-ai/dsh-host-webserver'
 import { PetService } from './service.ts'
 import { makePetRoutes, petPackageRoot, type SettingsRoutesApi } from './routes.ts'
 import type { CustomModelEntry } from './models.ts'
+import { listBuiltinPresets, resolveModelUrl, resolveSpatialTap, resolveMotionMap } from './models-host.ts'
 import { PersonasStore } from './personas.ts'
+import { CustomModelsStore } from './custom-models.ts'
 
 export { PetService } from './service.ts'
 export type { PetState, PetStateView } from './service.ts'
@@ -22,14 +24,21 @@ export {
   listBuiltinPresets,
   resolveModelUrl,
   resolveSpatialTap,
+  resolveMotionMap,
+} from './models-host.ts'
+export {
   mergeSpatialTap,
   DEFAULT_SPATIAL_TAP,
+  DEFAULT_MOTION_MAP,
+  ANIMATION_SLOTS,
 } from './models.ts'
 export type {
   BuiltinPreset,
   CustomModelEntry,
   SpatialTapConfig,
   SpatialTapOverride,
+  AnimationSlot,
+  MotionMap,
 } from './models.ts'
 
 /** 稳定 cordis 插件名（对应 cordis.patch.yml insert id）。 */
@@ -53,12 +62,14 @@ export interface Config {
   maxFps: MaxFpsOption
   /** 选中模型：内置 preset id 或自定义模型 id（也兼容直接 URL）。 */
   model: string
-  /** 调试模式：显示调试面板（开发用）。 */
+  /** 开发者选项总开关：开启后显示调试面板/点击分区等开发者入口。 */
+  developerMode: boolean
+  /** 调试面板：显示调试面板（开发用）。 */
   debug: boolean
   /** 显示点击分区叠加层（空间回退色块，开发用）。 */
   showTapZones: boolean
-  /** 用户自定义模型（设置面板增删改，spec §2/§6）。 */
-  customModels: CustomModelEntry[]
+  /** @deprecated 自定义模型已迁移到 $DSH_HOME/live2d-pet/custom-models.jsonc，不再写 settings.yaml。 */
+  customModels?: CustomModelEntry[]
   /** 选中人设 id：内置（tsundere/genki/…）或自定义人设 id（spec §3）。 */
   persona: string
 }
@@ -72,26 +83,9 @@ export const Config: Schema<Config> = Schema.object({
     Schema.const(0),
   ]).default(30),
   model: Schema.string().default('hiyori'),
+  developerMode: Schema.boolean().default(false),
   debug: Schema.boolean().default(false),
   showTapZones: Schema.boolean().default(false),
-  customModels: Schema.array(
-    Schema.object({
-      id: Schema.string(),
-      name: Schema.string(),
-      modelUrl: Schema.string(),
-      spatialTap: Schema.object({
-        headMaxNy: Schema.number().min(0).max(1),
-        legMinNy: Schema.number().min(0).max(1),
-        armMinNy: Schema.number().min(0).max(1),
-        headMinNx: Schema.number().min(0).max(1),
-        headMaxNx: Schema.number().min(0).max(1),
-        bodyMinNx: Schema.number().min(0).max(1),
-        bodyMaxNx: Schema.number().min(0).max(1),
-        armLeftMinNx: Schema.number().min(0).max(1),
-        armRightMaxNx: Schema.number().min(0).max(1),
-      }),
-    }),
-  ).default([]),
   persona: Schema.string().default('tsundere'),
 })
 
@@ -110,7 +104,13 @@ export function apply(ctx: Context, config: Config): void {
     return resolved ?? config
   }
 
-  const service = new PetService(ctx, resolveConfig, new PersonasStore())
+  const customModelsStore = new CustomModelsStore()
+  // 旧数据迁移：settings.yaml 里若还有 customModels 且新文件为空，则一次性写入 custom-models.jsonc
+  const initialConfig = resolveConfig()
+  if (initialConfig.customModels?.length && customModelsStore.load().models.length === 0) {
+    customModelsStore.write(initialConfig.customModels)
+  }
+  const service = new PetService(ctx, resolveConfig, new PersonasStore(), customModelsStore)
 
   // 设置读写 API：Host 直连 ctx.settings（不走 wire 白名单——dsh-host-apiproxy
   // 只暴露内置 allowlist，第三方 namespace 见 research/settings-tab.md）。

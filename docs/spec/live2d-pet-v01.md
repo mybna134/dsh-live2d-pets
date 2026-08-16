@@ -16,11 +16,11 @@ DSH Web GUI 中一只悬浮于角落的 Live2D 桌宠，实时镜像当前会话
   - 尺寸滑杆（40–400px，默认 160）
   - **渲染帧率**（尺寸下方独立分组，标题「渲染帧率」）：一行三个**自绘圆形单选**（○ 30 / ○ 60 / ○ 不限制帧率；配置值 `maxFps`：`30` / `60` / `0`）；默认 **30**；改档经 SSE **立刻**作用到 PIXI `ticker.maxFPS`（`0` = 不设上限），无需重启/刷新；圆点样式与模型列表单选**共用同一自绘控件**（不使用原生 radio，避免深色主题白框）
   - **人设**（独立分组，标题「人设台词」）：下拉切换（内置六种 + 自定义人设自动出现）+ 文件工具行；切换后全部台词即时换语气（SSE 推送，无需重启/刷新）
-  - 模型列表：内置策展清单（只读，含许可信息）+ 用户自定义模型（可添加 / 删除 / 修改，添加只需名称 + `.model3.json` URL；**可选**填写空间回退分区覆盖 `spatialTap`）；选中项决定加载模型
-  - **开发者选项**（独立分组）：调试模式开关（显示调试面板，默认关）+ **显示点击分区**（`showTapZones`，在模型上叠加空间回退四档色块，默认关；与调试面板可独立开关）
+  - 模型列表：内置策展清单（只读，含许可信息）+ 用户自定义模型（可添加 / 删除 / 修改，添加只需名称 + `.model3.json` URL；**可选**填写空间回退分区覆盖 `spatialTap`；**可选**配置**动画映射**——实时解析模型动作组，为 5 个状态 + 4 个互动部位各挂多个动作组，多选=触发时随机选一个，未配置槽位沿用默认）；选中项决定加载模型
+  - **开发者选项**（独立分组）：总开关 `developerMode`（默认关）；开启后显示**调试面板**开关（`debug`，默认关）与**显示点击分区**（`showTapZones`，默认关；与调试面板可独立开关），并在「内置模型（只读）」标题右侧显示「打开内置模型配置文件」按钮（经 DSH `openPath` 打开 `src/presets/presets.jsonc`，打不开则弹层提示路径）
 - **自定义人设（人设区工具行）**：
   - 「↻ 重新读取」：Host 现读人设文件 + SSE 推送，宠物与下拉**当场更新**（不重启不刷新；文件改坏时保留上一份好配置并在页面提示）
-  - 「自定义人设 ↗」：优先经 DSH `host.openPath` 用系统默认程序打开 `$DSH_HOME/live2d-pet-personas.json`；打不开则弹层兜底（一键复制文件路径 + 一键复制女仆模板）
+  - 「自定义人设 ↗」：优先经 DSH `host.openPath` 用系统默认程序打开 `$DSH_HOME/live2d-pet/personas.jsonc`；打不开则弹层兜底（一键复制文件路径 + 一键复制女仆模板）
   - 人设文件为**插件独有 JSONC**（允许注释）：首次启动落地模板（含使用说明 + **注释版女仆人设彩蛋**——取消注释、点「重新读取」即得），此后插件**只读不写**；用户复制粘贴模板块即可增加自己的性格预设
 - 调试面板（debug 开启时显示）：实时 agent 状态、宠物当前状态/动画、模型信息（尺寸/缩放/命中区名）、最近气泡、错误日志、FPS；提供「演示状态」切换（强制 空闲/思考/等待/完成/出错）用于测试状态机；与宠物同顶层容器（ADR-005），关闭时零渲染
 - **点击分区叠加**（`showTapZones`）：在模型上叠加空间回退四档色块（头/身/手/腿，与分档阈值一致，pointer-events:none）；经设置「开发者选项」开关，可与调试面板独立启用
@@ -65,6 +65,7 @@ DSH Web GUI 中一只悬浮于角落的 Live2D 桌宠，实时镜像当前会话
 - **防刷屏**：点击互动仅保留 **80ms** 防抖（挡同一次 pointer 误触双发）；**不再**等气泡播完才能再点。每次有效点击立刻换一条随机点击台词并**重播**互动动作；随机时在同一池内**避开上一条**（池 ≥2）。交互气泡可短暂抢占长状态常驻气泡，显示结束后回到当前阶段文案
 - 互动动画可打断当前状态动画与上一次互动动画，结束后回到当前状态对应的动画
 - **动作优先级**：待机动作按 `IDLE` 优先级播放；思考/出错/完成/等待等状态动作与四档互动动作均按 `FORCE` 优先级播放。状态动作可立即切换（含长状态阶段重播），互动可打断状态动画与上一次互动
+- **互动动作映射**：自定义模型可在「动画映射」中为摸头/摸腿/摸手/摸身体配置动作组；未配置时沿用默认 `TapHead→TapBody` 等候选链
 - **动作期间抑制鼠标跟随**：播放任何非 idle 动作时，宠物先复位正视前方并暂停鼠标跟随，动作真正播完（`motionFinish`）后恢复跟随；避免摸头等动作的头部动画被鼠标转向叠加扭曲
 - **点击台词池**：内置六人设每个部位（tapHead/tapLeg/tapArm/tapBody）约 **4–5** 条，减轻连点重复感；女仆模板彩蛋同步加厚；自定义人设可不覆盖完整条数（沿用 base）
 - **拖动与气泡**：拖拽中隐藏气泡（含长状态常驻气泡，阶段静默推进）；松手后若处于长状态则恢复显示当前阶段文案
@@ -79,10 +80,10 @@ DSH Web GUI 中一只悬浮于角落的 Live2D 桌宠，实时镜像当前会话
 ## 6. 模型清单与加载
 
 - 模型一律 **URL 直载**：宠物从选中模型解析出的 `.model3.json` URL 加载，**不随包分发任何模型文件**
-- **内置模型清单**（`src/presets/presets.json`，设置面板模型列表的只读部分）：策展的 URL 条目，**只读不可增删改**。**已定稿 5 条**（2026-08）：Hiyori / Haru / Mao / Mark / Natori，均为 Live2D 官方示例模型（Cubism 4，商用可用，需标注著作权；[示例模型条款](https://www.live2d.com/eula/live2d-sample-model-terms_cn.html)）
+- **内置模型清单**（`src/presets/presets.jsonc`，设置面板模型列表的只读部分，JSONC 支持注释）：策展的 URL 条目，**只读不可增删改**。**已定稿 5 条**（2026-08）：Hiyori / Haru / Mao / Mark / Natori，均为 Live2D 官方示例模型（Cubism 4，商用可用，需标注著作权；[示例模型条款](https://www.live2d.com/eula/live2d-sample-model-terms_cn.html)）
 - 清单门槛为**许可可标注**：每条记录模型名称、作者、许可类型与许可链接（点击可查看），**不做许可合规判断**；NC（禁止商用）模型可收录，但列表中**明确标注"仅限非商用"**；条目可可选附带 `spatialTap`（如 Hiyori 的居中分区矩形）覆盖该模型空间回退
 - **默认模型商用安全**：默认 Hiyori（商用可用），插件装完自动加载不会把用户带入 NC 使用
-- **自定义模型**：设置面板「模型列表」中可**添加 / 删除 / 修改**用户自备模型（名称 + `.model3.json` URL，零许可风险路径）；编辑时可展开**空间分区覆盖（可选）**，按字段填写 0–1 相对比例（留空=该字段用全局默认）；自定义条目持久化到 settings 用户层，与内置清单合并展示、均可选中；删除/修改仅作用于自定义条目
+- **自定义模型**：设置面板「模型列表」中可**添加 / 删除 / 修改**用户自备模型（名称 + `.model3.json` URL，零许可风险路径）；编辑时可展开**空间分区覆盖（可选）**，按字段填写 0–1 相对比例（留空=该字段用全局默认）；编辑时可展开**动画映射（可选）**：实时解析该模型 `.model3.json` 的 `Motions` 动作组，为 5 个状态（空闲/思考/出错/完成/等待审批）与 4 个互动部位（摸头/摸腿/摸手/摸身体）各选择多个动作组；多选不做排序，触发时随机选一个播放；未配置槽位沿用内置默认候选链；解析失败仍可保存模型，映射区提示“无法解析动画列表，可稍后重试”；自定义条目持久化到 `$DSH_HOME/live2d-pet/custom-models.jsonc`，与内置清单合并展示、均可选中；删除/修改仅作用于自定义条目
 - **加载失败兜底**：显示静态头像占位 + 错误气泡提示，不影响 GUI 其它功能；可从设置切换其它模型
 
 ## 7. 性能与不打扰
@@ -114,18 +115,20 @@ DSH Web GUI 中一只悬浮于角落的 Live2D 桌宠，实时镜像当前会话
 ## 9. 技术边界（实现约定，非用户行为）
 
 - 渲染：pixi-live2d-display 0.4.0 + PixiJS 6.5.10 + Cubism Core 4（ADR-003；ADR-001 已被其取代）
-- 挂载：Client Slot `shell.overlay`；设置入口：Client Slot `settings.section`（独立设置页，ADR-002）+ Host `ctx.settings` namespace（`$DSH_HOME/settings.yaml`；base = cordis.yml 条目 config 子集，用户层覆盖；模型列表自定义条目存于同一 namespace）
+- 挂载：Client Slot `shell.overlay`；设置入口：Client Slot `settings.section`（独立设置页，ADR-002）+ Host `ctx.settings` namespace（`$DSH_HOME/settings.yaml`；base = cordis.yml 条目 config 子集，用户层覆盖；自定义模型条目存于 `$DSH_HOME/live2d-pet/custom-models.jsonc`，不再写入 settings.yaml）
 - 设置传输：**不走 settingsScope wire**（dsh-host-apiproxy 白名单不暴露第三方 namespace，官方 deferred work，见 research 3.4）；改走插件自身同源 API `GET/POST /api/live2d-pet/settings`（Host 直连 `ctx.settings`，持久化语义不变，research 3.5）
 - 状态源：Host 订阅 `agent/status`、`agent/error`、`agent/turn-stopping` 等（ADR-002）
 - 状态传输：Host→Client 经同源 **SSE 端点 `/api/live2d-pet/events`** 推送（连接即回发快照 + 变更推送 + 30s 心跳，ADR-006），替代 v0.1 的 800ms 轮询；初始首帧仍走 `GET /api/live2d-pet/state`
 - **人设体系**（ADR-007）：
-  - 内置六人设文案常量在 client（`src/client/personas.ts`）；自定义人设走**插件独有 JSONC 文件** `$DSH_HOME/live2d-pet-personas.json`（零接触 DSH settings yaml 体系）——首启动落地模板后只读不写
+  - 内置六人设文案常量在 client（`src/client/personas.ts`）；自定义人设走**插件独有 JSONC 文件** `$DSH_HOME/live2d-pet/personas.jsonc`（零接触 DSH settings yaml 体系）——首启动落地模板后只读不写
   - Host `PersonasStore` 每次快照**现读**该文件（无缓存：刷新页面即生效）；`POST /api/live2d-pet/reload-personas` 重读 + version bump + SSE 推送（「↻ 重新读取」按钮）
   - `PetStateView` 携带 `config.persona` + `customPersonas`（原样定义）+ `personasError` + `personasFile`；client 按 base 链本地合并出完整台词表（内置表不重复下发）
   - 命中检测：pixi-live2d-display `hitTest(x, y)` 吃画布世界坐标、返回命中区域名数组（v0.1 曾误用 `(name,x,y)` 恒真值导致全身判为头）；部位按正则分桶 + 优先级 头>腿>手>身体
   - 鼠标跟随：pixi-live2d-display `model.focus(x, y)` 吃 PIXI world space（canvas 本地坐标），内部 `FocusController` 平滑插值并映射 `ParamAngleX/Y/Z` + `ParamEyeBallX/Y` + `ParamBodyAngleX`；复位时直接置 `internalModel.focusController.focus(0, 0, true)`
   - 动作管理：pixi-live2d-display `MotionPriority`（IDLE=1 / NORMAL=2 / FORCE=3），idle 用 IDLE、状态与互动用 FORCE；重播同一动作前先 `stopAllMotions()`；`motion()` 的 Promise 只代表开始，完成信号统一用 `motionFinish`（ADR-008）
   - focus 抑制：非 idle 动作播放期间 `focusController.focus(0, 0, true)` 归零 + `pointermove` 门控，`motionFinish` 后恢复跟随（ADR-008）
+  - 动画映射：`resolveMotionMap()` 合并 `DEFAULT_MOTION_MAP` + 自定义条目 `animationMap` / 内置 preset `animationMap`，经 `PetStateView.config.motionMap` 下发 client；自定义条目动画映射在设置页实时解析 `.model3.json` 的 `Motions` 动作组，多选=随机选择（ADR-009）
+  - debug 预览：调试面板直接解析当前模型 `.model3.json` 的 `Motions`，列出**模型原生全部具体动画**（按动作组分组的文件列表）；选择后直接 `model.motion(group, index, FORCE)` 播放，不掺入插件状态机/焦点/恢复逻辑（ADR-009）
   - 「自定义人设 ↗」经 client `ctx.get('workspaces').openPath`（DSH host.openPath 能力）打开文件；不可用时弹层兜底（复制路径/模板）
 - 模型清单条目许可可标注（类型 + 链接，NC 标注）；默认模型商用安全；SDK 按 Live2D 官方条款
 - **spike 结果（见 ADR-003）**：WebGL ✅ / DOM·script 注入 ✅ / CDN 脚本加载 ✅ / Host→Client 轮询 ✅ / 模型渲染 ✅ / 动作·表情 ✅ / 触摸命中 ✅；Cubism 5 兼容未验证

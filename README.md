@@ -77,8 +77,8 @@ dsh web
 - **显示**：开关宠物
 - **尺寸**：40–400px（默认 160）
 - **渲染帧率**：30 / 60 / 不限制（默认 30）
-- **人设台词**：切换内置或自定义人设；「自定义人设 ↗」编辑 `$DSH_HOME/live2d-pet-personas.json`，改完点「↻ 重新读取」
-- **模型**：选内置策展模型，或在「我的模型」添加名称 + `.model3.json` URL（可选空间分区覆盖）
+- **人设台词**：切换内置或自定义人设；「自定义人设 ↗」编辑 `$DSH_HOME/live2d-pet/personas.jsonc`，改完点「↻ 重新读取」
+- **模型**：选内置策展模型，或在「我的模型」添加名称 + `.model3.json` URL（可选空间分区覆盖 / 动画映射）；自定义模型存于 `$DSH_HOME/live2d-pet/custom-models.jsonc`
 - **开发者选项**：调试面板、显示点击分区色块
 
 ### 卸载
@@ -115,7 +115,7 @@ dsh plugin --profile web remove dsh-live2d-pets
 ## 许可
 
 - **插件代码**：MIT
-- **模型清单**：模型一律 URL 直载、不随包分发；清单门槛为「许可可标注」——每条记录许可类型与链接，NC（禁止商用）模型标注"仅限非商用"（清单见 `[src/presets/presets.json](src/presets/presets.json)`）
+- **模型清单**：模型一律 URL 直载、不随包分发；清单门槛为「许可可标注」——每条记录许可类型与链接，NC（禁止商用）模型标注"仅限非商用"（清单见 `[src/presets/presets.jsonc](src/presets/presets.jsonc)`）
 - **内置模型 Hiyori / Haru / Mao / Mark / Natori**：Live2D 官方示例模型，按[示例模型条款](https://www.live2d.com/eula/live2d-sample-model-terms_cn.html)使用（免费商用可，需标注著作权）
 - **Live2D SDK**：按 [Live2D 官方条款](https://help.live2d.com/zh-CHS/sdk/)（免费商用，需遵守版权声明等）
 

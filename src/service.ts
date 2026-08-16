@@ -10,8 +10,9 @@ import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-user-approval'
 import type { Config } from './index.ts'
-import type { CustomModelEntry, SpatialTapConfig } from './models.ts'
-import { resolveModelUrl, resolveSpatialTap } from './models.ts'
+import type { CustomModelEntry, MotionMap, SpatialTapConfig } from './models.ts'
+import { resolveModelUrl, resolveMotionMap, resolveSpatialTap } from './models-host.ts'
+import { CustomModelsStore, type CustomModelsFileView } from './custom-models.ts'
 import {
   loadPetPersist,
   savePetPersist,
@@ -40,6 +41,8 @@ export interface PetStateView {
     showTapZones: boolean
     /** 当前模型生效的空间回退完整阈值（自定义可覆盖；spec §4）。 */
     spatialTap: SpatialTapConfig
+    /** 当前模型生效的状态/互动动画映射（自定义/内置可覆盖；缺省 DEFAULT_MOTION_MAP）。 */
+    motionMap: MotionMap
     /** 选中人设 id（内置或自定义；spec §3）。 */
     persona: string
   }
@@ -71,6 +74,7 @@ export class PetService {
     private readonly ctx: Context,
     private readonly getConfig: () => Config,
     private readonly personasStore?: PersonasStore,
+    private readonly customModelsStore?: CustomModelsStore,
   ) {
     this.display = loadPetPersist()
     // 卸载时清理"完成"保持计时器
@@ -125,6 +129,7 @@ export class PetService {
     // 无缓存现读：改完文件刷新页面/点「重新读取」即拿到最新（spec §2）
     const personas: PersonasFileView = this.personasStore?.load()
       ?? { personas: [], error: null, path: '' }
+    const customModels = this.listCustomModels()
     return {
       state: this.state,
       agent: this.agent,
@@ -133,10 +138,11 @@ export class PetService {
         size: config.size,
         maxFps: config.maxFps,
         model: config.model,
-        modelUrl: resolveModelUrl(config.model, config.customModels),
+        modelUrl: resolveModelUrl(config.model, customModels),
         debug: config.debug,
         showTapZones: !!config.showTapZones,
-        spatialTap: resolveSpatialTap(config.model, config.customModels),
+        spatialTap: resolveSpatialTap(config.model, customModels),
+        motionMap: resolveMotionMap(config.model, customModels),
         persona: config.persona || DEFAULT_PERSONA_ID,
       },
       display: { ...this.display },
@@ -157,7 +163,20 @@ export class PetService {
 
   /** 用户自定义模型列表（设置面板模型列表的 custom 部分，Host 权威视图）。 */
   listCustomModels(): CustomModelEntry[] {
-    return this.getConfig().customModels
+    return this.customModelsStore?.load().models ?? this.getConfig().customModels ?? []
+  }
+
+  /** 自定义模型文件视图（路径/错误/列表），供设置面板与“打开配置文件”使用。 */
+  customModelsFile(): CustomModelsFileView {
+    return this.customModelsStore?.load() ?? { models: [], error: null, path: '' }
+  }
+
+  /** 写回自定义模型列表（设置面板保存后调用），并推送配置变化。 */
+  saveCustomModels(models: CustomModelEntry[]): CustomModelsFileView {
+    const view = this.customModelsStore?.write(models) ?? { models, error: null, path: '' }
+    this.version += 1
+    this.emitChange()
+    return view
   }
 
   /** 更新显示配置（拖动/尺寸）并持久化；数值在服务端按权威边界 clamp。 */

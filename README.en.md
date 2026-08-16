@@ -69,8 +69,8 @@ Open **DSH Settings → “Pet config”**. Changes apply immediately — no res
 - **Show pet**: on / off
 - **Size**: 40–400px (default 160)
 - **Render FPS**: 30 / 60 / unlimited (default 30)
-- **Personas**: switch built-in or custom tones; “Custom personas ↗” edits `$DSH_HOME/live2d-pet-personas.json`, then hit “↻ Reload”
-- **Models**: pick a curated preset, or add name + `.model3.json` URL under “My models” (optional spatial-tap override)
+- **Personas**: switch built-in or custom tones; “Custom personas ↗” edits `$DSH_HOME/live2d-pet/personas.jsonc`, then hit “↻ Reload”
+- **Models**: pick a curated preset, or add name + `.model3.json` URL under “My models” (optional spatial-tap / animation mapping); custom models live in `$DSH_HOME/live2d-pet/custom-models.jsonc`
 - **Developer options**: debug panel, show tap-zone overlay
 
 ### Uninstall
@@ -99,6 +99,6 @@ dsh plugin --profile web remove dsh-live2d-pets
 ## License
 
 - **Plugin code**: MIT
-- **Model list**: URL-only, not shipped in the package; each entry must record license type + link; NC models marked non-commercial only ([`src/presets/presets.json`](src/presets/presets.json))
+- **Model list**: URL-only, not shipped in the package; each entry must record license type + link; NC models marked non-commercial only ([`src/presets/presets.jsonc`](src/presets/presets.jsonc))
 - **Built-in Hiyori / Haru / Mao / Mark / Natori**: Live2D sample models under the [Sample Model Terms](https://www.live2d.com/eula/live2d-sample-model-terms_en.html) (free for commercial use with attribution)
 - **Live2D SDK**: follow [Live2D official terms](https://www.live2d.com/en/download/cubism-sdk/)

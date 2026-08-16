@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PersonasStore, stripJsonComments, normalizeCustomPersona } from './personas.ts'
@@ -10,6 +10,7 @@ let home = ''
 beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), 'dsh-live2d-pet-personas-'))
   process.env.DSH_HOME = home
+  mkdirSync(join(home, 'live2d-pet'), { recursive: true })
 })
 
 afterEach(() => {
@@ -55,7 +56,7 @@ describe('normalizeCustomPersona', () => {
 
 describe('PersonasStore', () => {
   it('首次构造落地模板（含女仆彩蛋注释），二次构造不覆盖用户文件', () => {
-    const file = join(home, 'live2d-pet-personas.json')
+    const file = join(home, 'live2d-pet', 'personas.jsonc')
     const store = new PersonasStore()
     expect(existsSync(file)).toBe(true)
     const text1 = readFileSync(file, 'utf8')
@@ -69,7 +70,7 @@ describe('PersonasStore', () => {
   })
 
   it('读取合法自定义人设；无 personas 键视为空清单', () => {
-    writeFileSync(join(home, 'live2d-pet-personas.json'), JSON.stringify({
+    writeFileSync(join(home, 'live2d-pet', 'personas.jsonc'), JSON.stringify({
       personas: [
         { id: 'mine', name: '我', base: 'kuudere', copy: { tapBody: ['嗯'] } },
         { id: 'dupe', name: 'A' },
@@ -84,7 +85,7 @@ describe('PersonasStore', () => {
   })
 
   it('解析失败保留上一份好结果并给出错误', () => {
-    const file = join(home, 'live2d-pet-personas.json')
+    const file = join(home, 'live2d-pet', 'personas.jsonc')
     writeFileSync(file, '{"personas":[{"id":"good"}]}', 'utf8')
     const store = new PersonasStore()
     expect(store.load().personas).toHaveLength(1)
@@ -95,10 +96,10 @@ describe('PersonasStore', () => {
   })
 
   it('personas 非数组 → 文件级错误；坏条目跳过并计数', () => {
-    writeFileSync(join(home, 'live2d-pet-personas.json'), '{"personas": 42}', 'utf8')
+    writeFileSync(join(home, 'live2d-pet', 'personas.jsonc'), '{"personas": 42}', 'utf8')
     expect(new PersonasStore().load().error).toContain('必须是数组')
 
-    writeFileSync(join(home, 'live2d-pet-personas.json'), '{"personas":[{"id":"ok"},{"id":"tsundere"},{"bad":1}]}', 'utf8')
+    writeFileSync(join(home, 'live2d-pet', 'personas.jsonc'), '{"personas":[{"id":"ok"},{"id":"tsundere"},{"bad":1}]}', 'utf8')
     const view = new PersonasStore().load()
     expect(view.personas.map((p) => p.id)).toEqual(['ok'])
     expect(view.error).toContain('2 个非法条目')

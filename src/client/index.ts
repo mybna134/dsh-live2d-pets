@@ -24,7 +24,13 @@ import { installPetSettingsNavIcon, pawNavIcon } from './paw-icon.ts'
 import { resolvePersonaCopy, BUILTIN_PERSONAS } from './personas.ts'
 import type { CopyTable } from '../persona-shared.ts'
 import { DEFAULT_PERSONA_ID } from '../persona-shared.ts'
-import { DEFAULT_SPATIAL_TAP, type SpatialTapConfig } from '../models.ts'
+import {
+  DEFAULT_MOTION_MAP,
+  DEFAULT_SPATIAL_TAP,
+  type AnimationSlot,
+  type MotionMap,
+  type SpatialTapConfig,
+} from '../models.ts'
 
 /** 注入所需服务。 */
 export const inject = ['slots']
@@ -77,14 +83,6 @@ const TRANSIENT_COPY_KEYS: Partial<Record<PetState, 'idle' | 'error' | 'done'>> 
   error: 'error',
   done: 'done',
 }
-/** 状态 → 候选动作组（按模型实际可用性逐个尝试）。 */
-const STATE_MOTIONS: Record<PetState, string[]> = {
-  idle: ['Idle'],
-  thinking: ['Thinking', 'Working', 'Idle'],
-  error: ['Failed', 'Sad', 'Idle'],
-  done: ['Jumping', 'Done', 'Idle'],
-  waiting: ['Waiting', 'Idle'],
-}
 /** vendor 运行时脚本（Host 同源路由，ADR-003）。 */
 const VENDOR_SCRIPTS = [
   '/pet-assets/vendor/pixi.min.js',
@@ -134,6 +132,13 @@ interface SlotsLike {
 
 interface DisplayLike { right: number; bottom: number; size: number }
 
+/** 调试预览用：模型中的一个具体动画（动作组 + 组内下标 + 展示名）。 */
+interface DebugMotionItem {
+  group: string
+  index: number
+  label: string
+}
+
 interface ModelLike {
   width: number
   height: number
@@ -157,6 +162,8 @@ interface ModelLike {
       off?(event: 'motionFinish', listener: () => void): unknown
       /** 停掉当前队列并复位 MotionState；重播同一动作前需要先调用。 */
       stopAllMotions?(): void
+      /** 模型定义的动作组名 → 动作定义列表（debug 预览枚举用）。 */
+      definitions?: Record<string, unknown>
     }
   }
 }
@@ -170,14 +177,6 @@ const TAP_PART_MATCHERS: Array<{ part: TapPart; re: RegExp }> = [
   { part: 'leg', re: /leg|foot|feet|shoe|腿|脚/i },
   { part: 'arm', re: /arm|hand|手/i },
 ]
-
-/** 部位 → 候选动作链（逐个按模型可用性尝试，最终回退 TapBody，spec §4）。 */
-const TAP_PART_MOTIONS: Record<TapPart, string[]> = {
-  head: ['TapHead', 'TapBody'],
-  leg: ['TapLeg', 'TapBody'],
-  arm: ['TapArm', 'TapBody'],
-  body: ['TapBody'],
-}
 
 /**
  * 按命中区域名优先级归类（头 > 腿 > 手 > 身体）；空列表返回 null。
@@ -326,6 +325,15 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
   let box: HTMLDivElement | null = null
   let bubble: HTMLDivElement | null = null
   let debugEl: HTMLDivElement | null = null
+  /** 调试面板“动画预览”数据：当前模型 MotionManager 暴露的全部具体动画。 */
+  let debugMotionList: DebugMotionItem[] = []
+  /** 按模型 URL 缓存原生动画列表，避免重复请求同一份 .model3.json。 */
+  const motionListCache = new Map<string, DebugMotionItem[]>()
+  let debugMotionSelect: HTMLSelectElement | null = null
+  /** 调试面板状态文本容器：与演示按钮/动画预览并列，避免被 textContent 覆盖。 */
+  let debugTextEl: HTMLDivElement | null = null
+  /** 是否正处于 debug 原生动画预览：预览期间抑制 focus，结束后只恢复跟随，不触发状态恢复。 */
+  let previewActive = false
   let canvas: HTMLCanvasElement | null = null
   /** 画布外包一层，便于绝对定位调试分区叠加层。 */
   let petLayer: HTMLDivElement | null = null
@@ -333,6 +341,8 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
   let showSpatialZones = false
   /** 当前模型生效的空间回退阈值（SSE config.spatialTap；默认 DEFAULT_SPATIAL_TAP）。 */
   let spatialTap: SpatialTapConfig = { ...DEFAULT_SPATIAL_TAP }
+  /** 当前模型生效的状态/互动动画映射（SSE config.motionMap；默认 DEFAULT_MOTION_MAP）。 */
+  let motionMap: MotionMap = { ...DEFAULT_MOTION_MAP }
   let zoneRaf = 0
   let app: {
     destroy(remove?: boolean): void
@@ -491,6 +501,29 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
   }
 
   /**
+   * 取某状态/互动部位的播放候选动作组：
+   * - 配置过动画映射 → 随机打乱后逐个尝试（多选=随机选择，不是优先级排序）
+   * - 未配置 → 默认候选链（保持旧版有序 fallback）
+   */
+  function motionNamesFor(slot: AnimationSlot): string[] {
+    const configured = motionMap[slot]
+    if (configured && configured.length > 0) {
+      const names = [...configured]
+      for (let i = names.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1))
+        ;[names[i], names[j]] = [names[j], names[i]]
+      }
+      // 配置的动作组全部失败时，仍回退到默认候选，避免模型/配置变化后完全无动作
+      const defaults = DEFAULT_MOTION_MAP[slot] ?? []
+      for (const name of defaults) {
+        if (!names.includes(name)) names.push(name)
+      }
+      return names
+    }
+    return DEFAULT_MOTION_MAP[slot] ?? []
+  }
+
+  /**
    * 按候选动作链启动动作，统一处理优先级、重播前 stopAllMotions、布尔返回值 fallback。
    * - idle 用 IDLE 优先级；状态/互动用 FORCE（NORMAL 不能打断 NORMAL，无法满足状态立即切换）。
    * - 非 idle 动作启动时抑制 focus，并等 motionFinish 真正播完后再恢复。
@@ -503,6 +536,7 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
     if (!model || names.length === 0) return false
     const seq = ++motionSeq
     const currentModel = model
+    previewActive = false
     if (options.suppressFocus) {
       focusSuppressed = true
       currentModel.internalModel?.focusController?.focus(0, 0, true)
@@ -533,7 +567,7 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
 
   function playState(state: PetState): void {
     if (!model) return
-    const names = STATE_MOTIONS[state] ?? []
+    const names = motionNamesFor(state)
     if (names.length === 0) return
     // 任何状态动作（含回到 idle）都会取代正在播放的互动/旧状态动作
     interactionGen += 1
@@ -546,6 +580,8 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
    * 注意该事件在库内部 state.complete()/自动回 idle 之前同步触发，恢复动作需延到微任务，
    * 避免在 MotionManager.update 中间重入修改 MotionState。 */
   function handleMotionFinish(): void {
+    const wasPreview = previewActive
+    previewActive = false
     const wasInteraction = interactionActive
     const gen = interactionGen
     const seq = motionSeq
@@ -554,6 +590,8 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
       // 若期间已有新动作启动（motionSeq 变化），由新动作接管焦点/恢复，这里不再处理
       if (seq !== motionSeq) return
       releaseFocusSuppression()
+      // debug 原生预览结束后只恢复 focus，不触发状态动作恢复
+      if (wasPreview) return
       if (wasInteraction && gen === interactionGen && !interactionActive && lastState) {
         playState(lastState)
       }
@@ -594,8 +632,8 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
       }
       playState(state)
     }
-    if (debugEl) {
-      debugEl.textContent =
+    if (debugTextEl) {
+      debugTextEl.textContent =
         `agent: ${next?.agent ?? '-'}  pet: ${state}  v${next?.version ?? '-'}\n` +
         `persona: ${activePersonaId}  hitAreas: ${hitAreas.join(',') || '-'}\n` +
         `pos: ${Math.round(pos.right)},${Math.round(pos.bottom)}  size: ${pos.size}`
@@ -639,6 +677,7 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
       const h = Math.round(nextSize * 1.2)
       try { app.renderer.resize(w, h) } catch { /* 旧渲染器 */ }
       pos.size = nextSize
+      syncDebugPanelWidth()
       if (model) fitModel(nextSize)
     } else {
       pos.size = nextSize
@@ -664,6 +703,7 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
     motionSeq += 1
     interactionGen += 1
     interactionActive = false
+    previewActive = false
     focusSuppressed = false
     lastPointerClient = null
     detachMotionFinish?.()
@@ -681,6 +721,8 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
     zoneOverlay = null
     if (canvas && canvas.parentNode) canvas.parentNode.removeChild(canvas)
     canvas = null
+    // 气泡临时移回 box，等待下次 petLayer 重建时再挂回
+    if (bubble && petLayer && bubble.parentNode === petLayer && box) box.appendChild(bubble)
     if (petLayer && petLayer.parentNode) petLayer.parentNode.removeChild(petLayer)
     petLayer = null
     removeFallback()
@@ -708,6 +750,12 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
       zoneOverlay.style.cssText = `position:absolute;left:0;top:0;width:${canvas.width}px;height:${canvas.height}px;pointer-events:none;z-index:2;display:${showSpatialZones ? 'block' : 'none'}`
       petLayer.appendChild(canvas)
       petLayer.appendChild(zoneOverlay)
+      // 气泡改为相对 petLayer 定位，避免调试面板插入后把气泡顶到面板上方
+      if (bubble && bubble.parentNode !== petLayer) petLayer.appendChild(bubble)
+      if (debugEl) {
+        petLayer.style.marginTop = '36px'
+        syncDebugPanelWidth()
+      }
       box.appendChild(petLayer)
 
       const M = PIXI.live2d?.Live2DModel
@@ -743,6 +791,7 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
         detachMotionFinish?.()
         detachMotionFinish = () => motionManager.off?.('motionFinish', handleMotionFinish)
       }
+      refreshDebugMotionGroups()
       fitModel(pos.size)
       // 首帧尺寸未知时延迟适配
       if (!(baseModelW > 0 && baseModelH > 0)) {
@@ -841,25 +890,197 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
     else stopZoneLoop()
   }
 
+  /** 调试面板的动画下拉同步（模型加载/切换时刷新选项）。 */
+  function updateDebugMotionSelect(): void {
+    if (!debugMotionSelect) return
+    const previous = debugMotionSelect.value
+    debugMotionSelect.textContent = ''
+    if (debugMotionList.length === 0) {
+      const opt = document.createElement('option')
+      opt.value = ''
+      opt.textContent = '（无动画或模型未加载）'
+      debugMotionSelect.appendChild(opt)
+      debugMotionSelect.value = ''
+      return
+    }
+    const groups = [...new Set(debugMotionList.map((item) => item.group))]
+    for (const group of groups) {
+      const optgroup = document.createElement('optgroup')
+      optgroup.label = group
+      for (const item of debugMotionList) {
+        if (item.group !== group) continue
+        const opt = document.createElement('option')
+        opt.value = `${item.group}\u0000${item.index}`
+        opt.textContent = item.label
+        optgroup.appendChild(opt)
+      }
+      debugMotionSelect.appendChild(optgroup)
+    }
+    if (debugMotionList.some((item) => `${item.group}\u0000${item.index}` === previous)) {
+      debugMotionSelect.value = previous
+    } else {
+      debugMotionSelect.value = ''
+    }
+  }
+
+  /** 从模型原生 .model3.json 拉取全部具体动画列表（不经过插件状态/映射逻辑）。 */
+  async function refreshDebugMotionGroups(): Promise<void> {
+    const url = currentModelUrl
+    const currentModel = model
+    if (!url || !currentModel) return
+    const cached = motionListCache.get(url)
+    if (cached) {
+      if (model === currentModel && debugMotionSelect) {
+        debugMotionList = cached
+        updateDebugMotionSelect()
+      }
+      return
+    }
+    try {
+      const res = await fetch(url)
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const data = await res.json() as {
+        FileReferences?: { Motions?: Record<string, Array<{ File?: unknown } | unknown>> }
+        Motions?: Record<string, Array<{ File?: unknown } | unknown>>
+      }
+      const motions = data?.FileReferences?.Motions ?? data?.Motions ?? {}
+      const list: DebugMotionItem[] = []
+      for (const [group, items] of Object.entries(motions)) {
+        if (!Array.isArray(items)) continue
+        items.forEach((motion, index) => {
+          const file = typeof motion === 'object' && motion !== null && 'File' in motion
+            ? String((motion as { File?: unknown }).File ?? index)
+            : String(index)
+          list.push({ group, index, label: `${group} / ${file}` })
+        })
+      }
+      motionListCache.set(url, list)
+      // 防止异步返回时模型/面板已经切换
+      if (model !== currentModel || !debugMotionSelect) return
+      debugMotionList = list
+      updateDebugMotionSelect()
+    } catch {
+      // 原生 JSON 拉取失败时，退回到运行时 definitions（至少还能看到列表）
+      const defs = currentModel.internalModel?.motionManager?.definitions ?? {}
+      const list: DebugMotionItem[] = []
+      for (const [group, motions] of Object.entries(defs)) {
+        if (!Array.isArray(motions)) continue
+        motions.forEach((motion, index) => {
+          const file = typeof motion === 'object' && motion !== null && 'File' in motion
+            ? String((motion as { File?: unknown }).File ?? index)
+            : String(index)
+          list.push({ group, index, label: `${group} / ${file}` })
+        })
+      }
+      if (model !== currentModel || !debugMotionSelect) return
+      debugMotionList = list
+      updateDebugMotionSelect()
+    }
+  }
+
+  /** debug 预览：直接播放模型原生指定动画（动作组 + 下标）。
+   *  每次点击都 stopAllMotions 后重播，因此同一动画也可反复预览；
+   *  预览期间抑制 focus，播完只恢复跟随，不触发状态动作恢复。 */
+  function previewMotion(value: string): void {
+    if (!model || !value) return
+    const sep = value.indexOf('\u0000')
+    if (sep < 0) return
+    const group = value.slice(0, sep)
+    const index = Number(value.slice(sep + 1))
+    if (!Number.isInteger(index)) return
+    const currentModel = model
+    ++motionSeq // 作废旧预览/动作的异步回调，避免旧 motionFinish 释放新预览的焦点
+    previewActive = true
+    focusSuppressed = true
+    currentModel.internalModel?.focusController?.focus(0, 0, true)
+    currentModel.internalModel?.motionManager?.stopAllMotions?.()
+    void currentModel.motion(group, index, MotionPriority.FORCE)
+  }
+
+  /** 让调试面板宽度与 canvas 同宽（canvas 尺寸变化/模型加载时同步）。 */
+  function syncDebugPanelWidth(): void {
+    if (!debugEl) return
+    const w = canvas?.width ?? pos.size
+    debugEl.style.width = `${w}px`
+    debugEl.style.boxSizing = 'border-box'
+  }
+
   /** 调试面板动态开关（spec §2）。 */
   function ensureDebugPanel(show: boolean): void {
     if (show && !debugEl && box) {
       debugEl = document.createElement('div')
-      debugEl.style.cssText = 'pointer-events:auto;margin-top:6px;padding:6px 8px;background:rgba(20,20,32,.9);color:#e8e8f0;border-radius:8px;font:11px/1.5 ui-monospace,monospace;white-space:pre-wrap;width:220px'
+      debugEl.style.cssText = 'pointer-events:auto;margin:6px 0 10px;padding:10px 12px;background:rgba(24,26,36,.94);color:#e8eaf0;border:1px solid rgba(128,128,128,.22);border-radius:10px;font:12px/1.5 ui-monospace,monospace;box-shadow:0 4px 16px rgba(0,0,0,.35)'
+
+      const debugTitle = document.createElement('div')
+      debugTitle.style.cssText = 'font-size:12px;font-weight:600;color:#aeb8cc;letter-spacing:.3px;margin-bottom:2px'
+      debugTitle.textContent = '调试面板'
+      debugEl.appendChild(debugTitle)
+
+      const sectionLabel = (text: string): HTMLDivElement => {
+        const el = document.createElement('div')
+        el.style.cssText = 'margin:10px 0 4px;color:#7f8aa0;font-size:11px;font-weight:600;letter-spacing:.3px'
+        el.textContent = text
+        return el
+      }
+
+      // 状态演示：等宽按钮网格
+      const demoLabel = sectionLabel('状态演示')
+      debugEl.appendChild(demoLabel)
       const demoRow = document.createElement('div')
-      demoRow.style.cssText = 'margin-top:4px;display:flex;gap:4px;flex-wrap:wrap'
+      demoRow.style.cssText = 'display:grid;grid-template-columns:repeat(5,1fr);gap:4px'
       for (const st of ['idle', 'thinking', 'waiting', 'done', 'error'] as const) {
         const btn = document.createElement('button')
         btn.textContent = st
+        btn.style.cssText = 'padding:4px 0;border-radius:6px;border:1px solid rgba(128,128,128,.25);background:rgba(128,128,128,.1);color:#dbe2ef;font-size:11px;font-family:inherit;cursor:pointer;outline:none'
+        btn.onmouseenter = () => { btn.style.background = 'rgba(120,170,255,.22)' }
+        btn.onmouseleave = () => { btn.style.background = 'rgba(128,128,128,.1)' }
         btn.onclick = () => { demoState = demoState === st ? null : st; applyState(view) }
         demoRow.appendChild(btn)
       }
       debugEl.appendChild(demoRow)
-      box.appendChild(debugEl)
+
+      // 动画预览：原生动画下拉 + 播放按钮
+      const motionLabel = sectionLabel('动画预览')
+      debugEl.appendChild(motionLabel)
+      const motionSelect = document.createElement('select')
+      motionSelect.style.cssText = 'flex:1;min-width:0;background:#1c1e28;color:#e8eaf0;border:1px solid rgba(128,128,128,.3);border-radius:6px;font-size:12px;padding:4px 6px;outline:none'
+      motionSelect.onchange = () => previewMotion(motionSelect.value)
+      const motionPlay = document.createElement('button')
+      motionPlay.textContent = '播放'
+      motionPlay.style.cssText = 'padding:4px 12px;border-radius:6px;cursor:pointer;font-size:12px;font-family:inherit;background:rgba(120,170,255,.28);color:#e8eaf0;border:1px solid rgba(120,170,255,.35);outline:none'
+      motionPlay.onmouseenter = () => { motionPlay.style.background = 'rgba(120,170,255,.4)' }
+      motionPlay.onmouseleave = () => { motionPlay.style.background = 'rgba(120,170,255,.28)' }
+      motionPlay.onclick = () => previewMotion(motionSelect.value)
+      const motionRow = document.createElement('div')
+      motionRow.style.cssText = 'display:flex;gap:6px;align-items:center'
+      motionRow.appendChild(motionSelect)
+      motionRow.appendChild(motionPlay)
+      debugMotionSelect = motionSelect
+      debugEl.appendChild(motionRow)
+
+      // 状态信息：与上方区域分隔
+      debugTextEl = document.createElement('div')
+      debugTextEl.style.cssText = 'margin-top:10px;padding-top:8px;border-top:1px solid rgba(128,128,128,.18);color:#9aa5b8;font-size:11px;white-space:pre-wrap;word-break:break-all'
+      debugEl.appendChild(debugTextEl)
+      syncDebugPanelWidth()
+      refreshDebugMotionGroups()
+      // 调试面板放在 petLayer 之前：显示在 canvas 上方；气泡在 petLayer 上方，
+      // 通过 petLayer margin-top 把气泡空间让出来，使顺序为 调试面板 → 气泡 → canvas
+      if (petLayer) {
+        box.insertBefore(debugEl, petLayer)
+        petLayer.style.marginTop = '36px'
+      } else {
+        box.appendChild(debugEl)
+      }
       applyState(view)
     } else if (!show && debugEl) {
+      previewActive = false
+      focusSuppressed = false
       debugEl.parentNode?.removeChild(debugEl)
       debugEl = null
+      debugMotionSelect = null
+      debugTextEl = null
+      if (petLayer) petLayer.style.marginTop = ''
     }
   }
 
@@ -875,6 +1096,8 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
     setSpatialZonesVisible(!!cfg.showTapZones)
     // 空间回退阈值：随当前模型解析结果热更新（自定义可覆盖；色块与分档共用）
     if (cfg.spatialTap) spatialTap = { ...cfg.spatialTap }
+    // 动画映射：随当前模型解析结果热更新（自定义/内置可覆盖；缺省默认）
+    if (cfg.motionMap) motionMap = { ...DEFAULT_MOTION_MAP, ...cfg.motionMap }
     // 帧率：立刻改 ticker.maxFPS（0 = 不限制）
     applyMaxFps(cfg.maxFps)
     // 尺寸：合并后重设画布 + 模型适配（避免连发 SSE 同步卡死主线程）
@@ -968,8 +1191,7 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
         lastTapLine[poolKey] = line
         showBubble(line)
       }
-      const [first, ...fallbacks] = TAP_PART_MOTIONS[part]
-      void playInteractionMotion(first, ...fallbacks)
+      void playInteractionMotion(motionNamesFor(part))
     } catch {
       // 命中检测异常：忽略本次点击
     }
@@ -980,11 +1202,11 @@ function boot(anchor: HTMLDivElement | null): (() => void) | undefined {
    * （motionFinish）后恢复当前状态动画（spec §4）。motion() 的 Promise 只代表开始，
    * 因此不再用 Promise 完成时间或 3s 兜底来恢复。
    */
-  async function playInteractionMotion(first: string, ...fallbacks: string[]): Promise<void> {
-    if (!model) return
+  async function playInteractionMotion(names: readonly string[]): Promise<void> {
+    if (!model || names.length === 0) return
     ++interactionGen
     await startMotionWithPriority(
-      [first, ...fallbacks],
+      names,
       MotionPriority.FORCE,
       { suppressFocus: true, isInteraction: true },
     )

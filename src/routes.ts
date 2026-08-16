@@ -11,7 +11,8 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import type { PetService } from './service.ts'
-import { listBuiltinPresets } from './models.ts'
+import { listBuiltinPresets } from './models-host.ts'
+import type { CustomModelEntry } from './models.ts'
 import type { SettingsPathOp } from '@deepseek-ai/dsh-settings'
 
 /** 设置读写 API（Host 直连 ctx.settings；不走 wire 白名单，见 research/settings-tab.md）。 */
@@ -208,7 +209,17 @@ export function makePetRoutes(deps: {
     getRoute(`${PET_API_PREFIX}/models`, async () => ({
       builtin: listBuiltinPresets(),
       custom: service.listCustomModels(),
+      presetsPath: join(packageRoot, 'src', 'presets', 'presets.jsonc'),
+      customModelsPath: service.customModelsFile().path,
     })),
+    getPostRoute(
+      `${PET_API_PREFIX}/custom-models`,
+      async () => service.customModelsFile(),
+      (body) => {
+        const models = Array.isArray(body.models) ? body.models as CustomModelEntry[] : []
+        return Promise.resolve(service.saveCustomModels(models))
+      },
+    ),
     getPostRoute(
       `${PET_API_PREFIX}/settings`,
       async () => settings.view(),

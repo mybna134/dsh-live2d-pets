@@ -1,7 +1,7 @@
 /**
  * 内置人设文案表（client 常量，spec §3）：六种二次元经典性格，
  * 每人设一整套 13 池台词（短状态 + 思考/等审批阶段 + 四档部位互动）。
- * 自定义人设（live2d-pet-personas.json）在 client 端按 base 继承合并，
+ * 自定义人设（$DSH_HOME/live2d-pet/personas.jsonc）在 client 端按 base 继承合并，
  * 合并结果与本表同构，宠物台词一律从「当前人设台词表」取。
  * @module dsh-live2d-pets/client/personas
  */

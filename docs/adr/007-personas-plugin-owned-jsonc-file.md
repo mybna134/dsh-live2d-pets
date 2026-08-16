@@ -12,15 +12,15 @@ Accepted
 
 人设体系需要支持用户自定义性格预设（含台词池覆盖与 base 继承）。自定义内容放哪里有三条路：
 
-1. **DSH settings 用户层**（`$DSH_HOME/settings.yaml`，经 `ctx.settings`，与开关/尺寸/模型列表同机制）
-2. **插件独有配置文件**（`$DSH_HOME/live2d-pet-personas.json`，Host 直接 fs 读写）
+1. **DSH settings 用户层**（`$DSH_HOME/settings.yaml`，经 `ctx.settings`，与开关/尺寸等标量设置同机制）
+2. **插件独有配置文件**（`$DSH_HOME/live2d-pet/personas.jsonc`，Host 直接 fs 读写）
 3. 随包静态文件（安装目录内）
 
 关键约束：用户要 **VSCode settings.json 式体验**——打开文件就能看到**带注释的模板**（女仆人设彩蛋：取消注释即得），复制粘贴即可添加自己的预设。而 settings.yaml 归 DSH settings 系统管：GUI 每次写设置会整体重写文件，**注释存活不可控**；标准 JSON 又不支持注释，模板彩蛋无从谈起。随包文件则在 node_modules 里，插件更新即丢。
 
 ## Decision
 
-自定义人设走**插件独有 JSONC 文件** `$DSH_HOME/live2d-pet-personas.json`（JSONC：解析前剥注释，与 VSCode settings.json 同构）：
+自定义人设走**插件独有 JSONC 文件** `$DSH_HOME/live2d-pet/personas.jsonc`（JSONC：解析前剥注释，与 VSCode settings.json 同构）：
 
 - **首启动落地模板**（不存在才写，含使用说明注释 + 注释版女仆彩蛋）；此后插件对该文件**只读不写**——注释永存
 - Host `PersonasStore` 每次 `/state` 快照**现读**（无缓存 → 刷新页面即生效）；`POST /reload-personas` 重读 + version bump + SSE 推送（设置页「↻ 重新读取」按钮，宠物当场换台词）

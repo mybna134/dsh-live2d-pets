@@ -13,7 +13,12 @@ import { createElement, useCallback, useEffect, useRef, useState } from 'react'
 import type { CSSProperties, ChangeEvent, MouseEvent, ReactNode, ReactElement } from 'react'
 import type { CustomModelEntry, SpatialTapOverride } from '../index.ts'
 import type { BuiltinPreset } from '../models.ts'
-import { DEFAULT_SPATIAL_TAP } from '../models.ts'
+import {
+  ANIMATION_SLOTS,
+  DEFAULT_SPATIAL_TAP,
+  type AnimationSlot,
+  type MotionMap,
+} from '../models.ts'
 import type { CustomPersonaDef } from '../persona-shared.ts'
 import { PERSONAS_TEMPLATE } from '../persona-shared.ts'
 import { builtinPersonaOptions } from './personas.ts'
@@ -25,10 +30,12 @@ export interface PetSettingsValue {
   /** 渲染帧率：30 / 60 / 0（不限制）。 */
   maxFps: number
   model: string
+  /** 开发者选项总开关：开启后显示调试面板/点击分区等开发者入口。 */
+  developerMode: boolean
+  /** 调试面板：显示调试面板（开发用）。 */
   debug: boolean
   /** 显示点击分区叠加层（空间回退色块）。 */
   showTapZones: boolean
-  customModels: CustomModelEntry[]
   persona: string
 }
 
@@ -48,9 +55,9 @@ const DEFAULT_VALUE: PetSettingsValue = {
   size: 160,
   maxFps: 30,
   model: 'hiyori',
+  developerMode: false,
   debug: false,
   showTapZones: false,
-  customModels: [],
   persona: 'tsundere',
 }
 
@@ -81,6 +88,48 @@ const SPATIAL_FIELD_LABELS: { key: keyof SpatialTapDraft; label: string; hint: s
   { key: 'armRightMaxNx', label: '右臂右', hint: String(DEFAULT_SPATIAL_TAP.armRightMaxNx) },
 ]
 
+/** 动画映射槽位中文名（设置页「动画映射」表单）。 */
+const ANIMATION_SLOT_LABELS: Record<AnimationSlot, string> = {
+  idle: '空闲',
+  thinking: '思考',
+  error: '出错',
+  done: '完成',
+  waiting: '等待审批',
+  head: '摸头',
+  leg: '摸腿',
+  arm: '摸手',
+  body: '摸身体',
+}
+
+/** 动画映射草稿 → 存储对象；全空返回 undefined（不写字段）。 */
+function motionMapFromDraft(draft: MotionMap): MotionMap | undefined {
+  const out: MotionMap = {}
+  for (const slot of ANIMATION_SLOTS) {
+    const groups = (draft[slot] ?? []).filter(Boolean)
+    if (groups.length > 0) out[slot] = groups
+  }
+  return Object.keys(out).length > 0 ? out : undefined
+}
+
+/** 存储对象 → 表单草稿（未配置槽位为空数组）。 */
+function draftFromMotionMap(m?: MotionMap | null): MotionMap {
+  const draft: MotionMap = {}
+  for (const slot of ANIMATION_SLOTS) draft[slot] = [...(m?.[slot] ?? [])]
+  return draft
+}
+
+/** 从 .model3.json 解析动作组名列表（FileReferences.Motions 或顶层 Motions）。 */
+async function fetchMotionGroups(url: string): Promise<string[]> {
+  const res = await fetch(url)
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  const data = await res.json() as {
+    FileReferences?: { Motions?: Record<string, unknown> }
+    Motions?: Record<string, unknown>
+  }
+  const motions = data?.FileReferences?.Motions ?? data?.Motions ?? {}
+  return Object.keys(motions)
+}
+
 function draftFromOverride(o?: SpatialTapOverride | null): SpatialTapDraft {
   return {
     headMaxNy: o?.headMaxNy != null ? String(o.headMaxNy) : '',
@@ -110,6 +159,7 @@ function overrideFromDraft(d: SpatialTapDraft): SpatialTapOverride | undefined {
 
 const SETTINGS_API = '/api/live2d-pet/settings'
 const MODELS_API = '/api/live2d-pet/models'
+const CUSTOM_MODELS_API = '/api/live2d-pet/custom-models'
 const STATE_API = '/api/live2d-pet/state'
 const RELOAD_PERSONAS_API = '/api/live2d-pet/reload-personas'
 
@@ -146,6 +196,38 @@ const buttonStyle: CSSProperties = {
   border: 'none',
 }
 
+/** 自定义模型“空间分区覆盖 / 动画映射”tab 样式。 */
+const panelTabStyle: CSSProperties = {
+  ...buttonStyle,
+  marginLeft: 0,
+  padding: '4px 12px',
+  borderRadius: 6,
+}
+const panelTabActiveStyle: CSSProperties = {
+  ...panelTabStyle,
+  background: 'rgba(120,170,255,.26)',
+  color: '#fff',
+}
+
+/** 分组标题右侧的链接型操作（蓝色、hover 下划线），与“打开内置模型配置文件”一致。 */
+function headerLink(text: string, onClick: () => void): ReactElement {
+  return createElement('a', {
+    href: '#',
+    style: {
+      color: '#4a9eff',
+      fontSize: 12,
+      textDecoration: 'none',
+      cursor: 'pointer',
+    },
+    onMouseEnter: (e: MouseEvent<HTMLAnchorElement>) => { e.currentTarget.style.textDecoration = 'underline' },
+    onMouseLeave: (e: MouseEvent<HTMLAnchorElement>) => { e.currentTarget.style.textDecoration = 'none' },
+    onClick: (e: MouseEvent<HTMLAnchorElement>) => {
+      e.preventDefault()
+      onClick()
+    },
+  }, text)
+}
+
 const inputStyle: CSSProperties = {
   padding: '6px 8px',
   borderRadius: 6,
@@ -177,6 +259,46 @@ function spatialTapFields(
         disabled,
         value: draft[key],
         onChange: (e: ChangeEvent<HTMLInputElement>) => setDraft({ ...draft, [key]: e.target.value }),
+      }),
+    )),
+  )
+}
+
+/** 动画映射表单：9 个槽位各一个多选下拉；解析失败时显示重试。 */
+function motionMapFields(
+  draft: MotionMap,
+  setDraft: (next: MotionMap) => void,
+  groups: readonly string[],
+  status: 'idle' | 'loading' | 'ready' | 'error',
+  disabled: boolean,
+  onRetry?: () => void,
+): ReactElement {
+  const options = groups.map((g) => ({ id: g, name: g }))
+  const statusLine = status === 'loading'
+    ? '正在解析模型动画列表…'
+    : status === 'error'
+      ? '无法解析动画列表，可稍后重试（模型仍可保存）'
+      : status === 'ready'
+        ? `已解析到 ${groups.length} 个动作组；多选=触发时随机选一个`
+        : '打开后实时解析模型动画列表；未配置的槽位沿用默认映射。'
+  return createElement('div', { style: { marginTop: 8, display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '8px 10px' } },
+    createElement('div', { style: { gridColumn: '1 / -1', display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: '#888' } },
+      createElement('span', null, statusLine),
+      status === 'error' && onRetry
+        ? createElement('button', { type: 'button', style: buttonStyle, onClick: onRetry }, '重试')
+        : null,
+    ),
+    ...ANIMATION_SLOTS.map((slot) => createElement('label', {
+      key: slot,
+      style: { display: 'flex', flexDirection: 'column', gap: 2, fontSize: 12, minWidth: 0 },
+    },
+      createElement('span', { style: { color: '#888' } }, ANIMATION_SLOT_LABELS[slot]),
+      createElement(ThemeMultiSelect, {
+        value: draft[slot] ?? [],
+        options,
+        disabled: disabled || status !== 'ready',
+        placeholder: '未配置（用默认）',
+        onChange: (next) => setDraft({ ...draft, [slot]: next }),
       }),
     )),
   )
@@ -322,6 +444,52 @@ function ThemeRadioGroup(props: ThemeRadioGroupProps): ReactElement {
   )
 }
 
+interface ThemeSwitchProps {
+  checked: boolean
+  disabled?: boolean
+  onChange: (next: boolean) => void
+}
+
+/** 自绘 switch：用于开发者选项总开关等“组标题右侧开关”场景。 */
+function ThemeSwitch(props: ThemeSwitchProps): ReactElement {
+  const { checked, disabled, onChange } = props
+  return createElement('button', {
+    type: 'button',
+    role: 'switch',
+    'aria-checked': checked,
+    disabled: !!disabled,
+    onClick: () => { if (!disabled) onChange(!checked) },
+    style: {
+      position: 'relative',
+      width: 38,
+      height: 20,
+      flexShrink: 0,
+      padding: 0,
+      border: 'none',
+      borderRadius: 10,
+      cursor: disabled ? 'not-allowed' : 'pointer',
+      background: checked ? RADIO_ACCENT : 'rgba(128,128,128,.35)',
+      opacity: disabled ? 0.55 : 1,
+      transition: 'background .15s',
+      outline: 'none',
+    },
+  },
+    createElement('span', {
+      style: {
+        position: 'absolute',
+        top: 2,
+        left: checked ? 20 : 2,
+        width: 16,
+        height: 16,
+        borderRadius: '50%',
+        background: '#fff',
+        boxShadow: '0 1px 3px rgba(0,0,0,.4)',
+        transition: 'left .15s',
+      },
+    }),
+  )
+}
+
 /**
  * 自绘下拉：原生 select 在 Windows 深色主题下会出焦点白框与 options 底部白线，
  * UA 弹出层几乎不可主题化，故用同色板菜单替代。
@@ -429,6 +597,143 @@ function ThemeSelect(props: ThemeSelectProps): ReactElement {
   )
 }
 
+interface ThemeMultiSelectProps {
+  value: string[]
+  options: ThemeSelectOption[]
+  disabled?: boolean
+  placeholder?: string
+  onChange: (next: string[]) => void
+}
+
+/** 多选下拉：选中项以 tag 展示在主按钮内；点击下拉项切换选中，保持打开以支持连续多选。 */
+function ThemeMultiSelect(props: ThemeMultiSelectProps): ReactElement {
+  const { value, options, disabled, placeholder, onChange } = props
+  const [open, setOpen] = useState(false)
+  const rootRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const onDoc = (e: Event) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false)
+    }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
+    document.addEventListener('pointerdown', onDoc)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('pointerdown', onDoc)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [open])
+
+  const nameOf = (id: string) => options.find((o) => o.id === id)?.name ?? id
+
+  return createElement('div', {
+    ref: rootRef,
+    style: { position: 'relative', flex: 1, minWidth: 0 },
+  },
+    createElement('button', {
+      type: 'button',
+      disabled: !!disabled,
+      'aria-haspopup': 'listbox',
+      'aria-expanded': open,
+      onClick: () => { if (!disabled) setOpen((v) => !v) },
+      style: {
+        ...inputStyle,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: 8,
+        width: '100%',
+        minHeight: 34,
+        textAlign: 'left',
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        background: 'rgba(128,128,128,.14)',
+        outline: 'none',
+        boxShadow: 'none',
+        opacity: disabled ? 0.55 : 1,
+      },
+    },
+      createElement('span', {
+        style: { display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center', flex: 1, minWidth: 0 },
+      },
+        value.length === 0
+          ? createElement('span', { style: { color: '#888' } }, placeholder ?? '选择动作组')
+          : value.map((id) => createElement('span', {
+            key: id,
+            style: {
+              padding: '1px 6px',
+              borderRadius: 4,
+              background: 'rgba(120,170,255,.22)',
+              color: '#dbe7ff',
+              fontSize: 11,
+              whiteSpace: 'nowrap',
+            },
+          }, nameOf(id))),
+      ),
+      createElement('span', { style: { color: '#888', fontSize: 10, flexShrink: 0 } }, open ? '▴' : '▾'),
+    ),
+    open && createElement('div', {
+      role: 'listbox',
+      'aria-multiselectable': true,
+      style: {
+        position: 'absolute',
+        left: 0,
+        right: 0,
+        top: 'calc(100% + 4px)',
+        zIndex: 20,
+        margin: 0,
+        padding: 4,
+        borderRadius: 8,
+        border: '1px solid rgba(128,128,128,.35)',
+        background: '#2a2a2e',
+        color: '#e8e8ec',
+        boxShadow: '0 8px 24px rgba(0,0,0,.45)',
+        maxHeight: 240,
+        overflowY: 'auto',
+      },
+    },
+      options.map((o) => {
+        const selected = value.includes(o.id)
+        return createElement('button', {
+          key: o.id,
+          type: 'button',
+          role: 'option',
+          'aria-selected': selected,
+          onClick: () => {
+            const next = selected ? value.filter((v) => v !== o.id) : [...value, o.id]
+            onChange(next)
+          },
+          style: {
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            width: '100%',
+            margin: 0,
+            padding: '6px 10px',
+            border: 'none',
+            borderRadius: 6,
+            textAlign: 'left',
+            cursor: 'pointer',
+            fontSize: 13,
+            color: '#e8e8ec',
+            background: selected ? 'rgba(120,170,255,.28)' : 'transparent',
+            outline: 'none',
+          },
+          onMouseEnter: (e: MouseEvent<HTMLButtonElement>) => {
+            if (!selected) e.currentTarget.style.background = 'rgba(128,128,128,.22)'
+          },
+          onMouseLeave: (e: MouseEvent<HTMLButtonElement>) => {
+            e.currentTarget.style.background = selected ? 'rgba(120,170,255,.28)' : 'transparent'
+          },
+        },
+          createElement('span', { style: { width: 14, flexShrink: 0, textAlign: 'center' } }, selected ? '☑' : '☐'),
+          o.name,
+        )
+      }),
+    ),
+  )
+}
+
 /** 设置路径 op（与 Host settings.mutate 对齐）。 */
 type SettingsOp = { op: 'set' | 'unset'; path: string[]; value?: unknown }
 
@@ -453,6 +758,40 @@ async function writeSettings(ops: SettingsOp[]): Promise<SettingsView | null> {
     })
     if (!response.ok) return null
     return await response.json() as SettingsView
+  } catch {
+    return null
+  }
+}
+
+/** 读取自定义模型文件（GET）。 */
+async function loadCustomModels(): Promise<{
+  models: CustomModelEntry[]
+  error: string | null
+  path: string
+} | null> {
+  try {
+    const response = await fetch(CUSTOM_MODELS_API)
+    if (!response.ok) return null
+    return await response.json() as { models: CustomModelEntry[]; error: string | null; path: string }
+  } catch {
+    return null
+  }
+}
+
+/** 写回自定义模型文件（POST 全量列表）。 */
+async function saveCustomModelsFile(models: CustomModelEntry[]): Promise<{
+  models: CustomModelEntry[]
+  error: string | null
+  path: string
+} | null> {
+  try {
+    const response = await fetch(CUSTOM_MODELS_API, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ models }),
+    })
+    if (!response.ok) return null
+    return await response.json() as { models: CustomModelEntry[]; error: string | null; path: string }
   } catch {
     return null
   }
@@ -541,6 +880,8 @@ export function PetSettingsSection(props: PetSettingsProps): ReactNode {
 
   // 内置清单（Host API，只读）
   const [builtin, setBuiltin] = useState<BuiltinPreset[]>([])
+  const [presetsPath, setPresetsPath] = useState<string>('')
+  const [customModelsPath, setCustomModelsPath] = useState<string>('')
   useEffect(() => {
     let alive = true
     fetch(MODELS_API)
@@ -548,10 +889,61 @@ export function PetSettingsSection(props: PetSettingsProps): ReactNode {
       .then((data) => {
         if (!alive || !data) return
         if (Array.isArray(data.builtin)) setBuiltin(data.builtin)
+        if (typeof data.presetsPath === 'string') setPresetsPath(data.presetsPath)
+        if (typeof data.customModelsPath === 'string') setCustomModelsPath(data.customModelsPath)
       })
       .catch(() => {})
     return () => { alive = false }
   }, [])
+
+  // 自定义模型（独立 JSONC 文件，不再混入 settings.yaml）
+  const [customModels, setCustomModels] = useState<CustomModelEntry[]>([])
+  const [customModelsError, setCustomModelsError] = useState<string | null>(null)
+  const reloadCustomModels = useCallback(() => {
+    loadCustomModels().then((view) => {
+      if (view === null) return
+      setCustomModels(view.models)
+      setCustomModelsError(view.error)
+      if (view.path) setCustomModelsPath(view.path)
+    })
+  }, [])
+  useEffect(() => { reloadCustomModels() }, [reloadCustomModels])
+
+  // 内置模型配置文件打开（开发者选项）：与「自定义人设 ↗」同款交互
+  const [builtinFileNotice, setBuiltinFileNotice] = useState<string | null>(null)
+  const [showBuiltinFilePopover, setShowBuiltinFilePopover] = useState(false)
+  const openBuiltinPresetsFile = () => {
+    if (!presetsPath) {
+      setBuiltinFileNotice('内置模型配置文件路径不可用')
+      return
+    }
+    const opened = props.openPath?.(presetsPath) ?? Promise.resolve(false)
+    opened.then((ok) => {
+      if (ok) {
+        setBuiltinFileNotice('已打开内置模型配置文件')
+      } else {
+        setShowBuiltinFilePopover(true)
+      }
+    })
+  }
+
+  // 自定义模型配置文件（custom-models.jsonc）打开：同款交互
+  const [customFileNotice, setCustomFileNotice] = useState<string | null>(null)
+  const [showCustomFilePopover, setShowCustomFilePopover] = useState(false)
+  const openCustomModelsFile = () => {
+    if (!customModelsPath) {
+      setCustomFileNotice('自定义模型配置文件路径不可用')
+      return
+    }
+    const opened = props.openPath?.(customModelsPath) ?? Promise.resolve(false)
+    opened.then((ok) => {
+      if (ok) {
+        setCustomFileNotice('已打开自定义模型配置文件')
+      } else {
+        setShowCustomFilePopover(true)
+      }
+    })
+  }
 
   // 尺寸滑杆：拖动中本地草稿，松手/失焦提交（避免拖动写满 settings.yaml）
   const [draftSize, setDraftSize] = useState<number | null>(null)
@@ -568,14 +960,60 @@ export function PetSettingsSection(props: PetSettingsProps): ReactNode {
   const [newName, setNewName] = useState('')
   const [newUrl, setNewUrl] = useState('')
   const [newSpatial, setNewSpatial] = useState<SpatialTapDraft>(EMPTY_SPATIAL_DRAFT)
-  const [showNewSpatial, setShowNewSpatial] = useState(false)
+  const [activeNewPanel, setActiveNewPanel] = useState<'spatial' | 'motion' | null>(null)
+  const [newMotionMap, setNewMotionMap] = useState<MotionMap>({})
+  const [newMotionGroups, setNewMotionGroups] = useState<string[]>([])
+  const [newMotionStatus, setNewMotionStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
   const [editId, setEditId] = useState<string | null>(null)
   const [editName, setEditName] = useState('')
   const [editUrl, setEditUrl] = useState('')
   const [editSpatial, setEditSpatial] = useState<SpatialTapDraft>(EMPTY_SPATIAL_DRAFT)
-  const [showEditSpatial, setShowEditSpatial] = useState(false)
+  const [activeEditPanel, setActiveEditPanel] = useState<'spatial' | 'motion' | null>(null)
+  const [editMotionMap, setEditMotionMap] = useState<MotionMap>({})
+  const [editMotionGroups, setEditMotionGroups] = useState<string[]>([])
+  const [editMotionStatus, setEditMotionStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
 
-  const custom = value.customModels ?? []
+  const custom = customModels
+  const customRef = useRef(custom)
+  customRef.current = custom
+
+  // 新增模型：打开「动画映射」或 URL 变化时实时解析动作组
+  useEffect(() => {
+    if (activeNewPanel !== 'motion' || !/^https?:\/\//.test(newUrl)) return
+    let alive = true
+    setNewMotionStatus('loading')
+    fetchMotionGroups(newUrl)
+      .then((groups) => {
+        if (!alive) return
+        setNewMotionGroups(groups)
+        setNewMotionStatus('ready')
+      })
+      .catch(() => {
+        if (!alive) return
+        setNewMotionGroups([])
+        setNewMotionStatus('error')
+      })
+    return () => { alive = false }
+  }, [activeNewPanel, newUrl])
+
+  // 编辑模型：同上
+  useEffect(() => {
+    if (activeEditPanel !== 'motion' || !/^https?:\/\//.test(editUrl)) return
+    let alive = true
+    setEditMotionStatus('loading')
+    fetchMotionGroups(editUrl)
+      .then((groups) => {
+        if (!alive) return
+        setEditMotionGroups(groups)
+        setEditMotionStatus('ready')
+      })
+      .catch(() => {
+        if (!alive) return
+        setEditMotionGroups([])
+        setEditMotionStatus('error')
+      })
+    return () => { alive = false }
+  }, [activeEditPanel, editUrl])
 
   // 写入串行化：ops 在出队时基于最新视图合成。若直接用渲染闭包里的
   // custom/value 组合完整数组替换，快速连续操作（如连删两个模型）会
@@ -589,19 +1027,36 @@ export function PetSettingsSection(props: PetSettingsProps): ReactNode {
     })
   }
 
+  // 自定义模型文件写入串行化（独立于 settings.yaml 写入队列）
+  const customWriteQueue = useRef<Promise<void>>(Promise.resolve())
+  const enqueueCustomWrite = (compose: (current: CustomModelEntry[]) => CustomModelEntry[]): void => {
+    customWriteQueue.current = customWriteQueue.current.then(async () => {
+      const view = await saveCustomModelsFile(compose(customRef.current))
+      if (view !== null) {
+        setCustomModels(view.models)
+        setCustomModelsError(view.error)
+        if (view.path) setCustomModelsPath(view.path)
+      }
+    })
+  }
+
   const addModel = () => {
     const name = newName.trim()
     const url = newUrl.trim()
     if (!name || !/^https?:\/\//.test(url)) return
     const spatialTap = overrideFromDraft(newSpatial)
-    const entry: CustomModelEntry = spatialTap
-      ? { id: `m${Date.now()}`, name, modelUrl: url, spatialTap }
-      : { id: `m${Date.now()}`, name, modelUrl: url }
-    enqueueWrite((current) => [{ op: 'set', path: ['customModels'], value: [...current.customModels, entry] }])
+    const animationMap = motionMapFromDraft(newMotionMap)
+    const entry: CustomModelEntry = { id: `m${Date.now()}`, name, modelUrl: url }
+    if (spatialTap) entry.spatialTap = spatialTap
+    if (animationMap) entry.animationMap = animationMap
+    enqueueCustomWrite((current) => [...current, entry])
     setNewName('')
     setNewUrl('')
     setNewSpatial(EMPTY_SPATIAL_DRAFT)
-    setShowNewSpatial(false)
+    setActiveNewPanel(null)
+    setNewMotionMap({})
+    setNewMotionGroups([])
+    setNewMotionStatus('idle')
   }
 
   const saveEdit = (id: string) => {
@@ -609,20 +1064,16 @@ export function PetSettingsSection(props: PetSettingsProps): ReactNode {
     const url = editUrl.trim()
     if (!name || !/^https?:\/\//.test(url)) return
     const spatialTap = overrideFromDraft(editSpatial)
-    enqueueWrite((current) => [
-      {
-        op: 'set',
-        path: ['customModels'],
-        value: current.customModels.map((c) => {
-          if (c.id !== id) return c
-          const next: CustomModelEntry = { id: c.id, name, modelUrl: url }
-          if (spatialTap) next.spatialTap = spatialTap
-          return next
-        }),
-      },
-    ])
+    const animationMap = motionMapFromDraft(editMotionMap)
+    enqueueCustomWrite((current) => current.map((c) => {
+      if (c.id !== id) return c
+      const next: CustomModelEntry = { id: c.id, name, modelUrl: url }
+      if (spatialTap) next.spatialTap = spatialTap
+      if (animationMap) next.animationMap = animationMap
+      return next
+    }))
     setEditId(null)
-    setShowEditSpatial(false)
+    setActiveEditPanel(null)
   }
 
   const beginEdit = (c: CustomModelEntry) => {
@@ -630,19 +1081,21 @@ export function PetSettingsSection(props: PetSettingsProps): ReactNode {
     setEditName(c.name)
     setEditUrl(c.modelUrl)
     setEditSpatial(draftFromOverride(c.spatialTap))
-    setShowEditSpatial(!!c.spatialTap && Object.keys(c.spatialTap).length > 0)
+    const hasSpatial = !!c.spatialTap && Object.keys(c.spatialTap).length > 0
+    const hasMotion = !!c.animationMap && Object.keys(c.animationMap).length > 0
+    setActiveEditPanel(hasSpatial ? 'spatial' : hasMotion ? 'motion' : null)
+    setEditMotionMap(draftFromMotionMap(c.animationMap))
+    setEditMotionGroups([])
+    setEditMotionStatus('idle')
   }
 
   const removeModel = (id: string) => {
     // 删除的是当前选中模型时，回退到第一个内置模型（builtin 加载完成前用默认 id）
     const fallbackModel = builtin[0]?.id ?? 'hiyori'
-    enqueueWrite((current) => {
-      const ops: SettingsOp[] = [
-        { op: 'set', path: ['customModels'], value: current.customModels.filter((c) => c.id !== id) },
-      ]
-      if (current.model === id) ops.push({ op: 'set', path: ['model'], value: fallbackModel })
-      return ops
-    })
+    enqueueCustomWrite((current) => current.filter((c) => c.id !== id))
+    if (value.model === id) {
+      enqueueWrite(() => [{ op: 'set', path: ['model'], value: fallbackModel }])
+    }
   }
 
   // ---- 人设区（spec §2/§3）：下拉选择 + 重新读取 + 自定义人设入口 ----
@@ -702,6 +1155,7 @@ export function PetSettingsSection(props: PetSettingsProps): ReactNode {
 
   const customRows = custom.map((c) => {
     const hasOverride = !!c.spatialTap && Object.keys(c.spatialTap).length > 0
+    const hasMotionMap = !!c.animationMap && Object.keys(c.animationMap).length > 0
     if (editId === c.id) {
       return createElement('div', { key: c.id, style: { ...rowStyle, display: 'flex', flexDirection: 'column', gap: 6 } },
         createElement('div', { style: { display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' } },
@@ -718,17 +1172,32 @@ export function PetSettingsSection(props: PetSettingsProps): ReactNode {
             onChange: (e: ChangeEvent<HTMLInputElement>) => setEditUrl(e.target.value),
           }),
           createElement('button', { style: buttonStyle, onClick: () => saveEdit(c.id) }, '保存'),
-          createElement('button', { style: buttonStyle, onClick: () => { setEditId(null); setShowEditSpatial(false) } }, '取消'),
+          createElement('button', { style: buttonStyle, onClick: () => { setEditId(null); setActiveEditPanel(null) } }, '取消'),
         ),
-        createElement('button', {
-          type: 'button',
-          style: { ...buttonStyle, marginLeft: 0, alignSelf: 'flex-start' },
-          onClick: () => setShowEditSpatial((v) => !v),
-        }, showEditSpatial ? '收起空间分区覆盖' : '空间分区覆盖（可选）'),
-        showEditSpatial && createElement('div', { key: 'edit-spatial' },
+        createElement('div', { key: 'edit-panel-tabs', style: { display: 'flex', gap: 4, marginTop: 4 } },
+          createElement('button', {
+            type: 'button',
+            style: activeEditPanel === 'spatial' ? panelTabActiveStyle : panelTabStyle,
+            onClick: () => setActiveEditPanel((v) => v === 'spatial' ? null : 'spatial'),
+          }, '空间分区覆盖'),
+          createElement('button', {
+            type: 'button',
+            style: activeEditPanel === 'motion' ? panelTabActiveStyle : panelTabStyle,
+            onClick: () => setActiveEditPanel((v) => v === 'motion' ? null : 'motion'),
+          }, '动画映射'),
+        ),
+        activeEditPanel === 'spatial' && createElement('div', { key: 'edit-spatial' },
           createElement('div', { style: { fontSize: 11, color: '#888', marginBottom: 4 } },
             '相对包围盒 0–1；留空=该字段用全局默认。改完请开「显示点击分区」对照色块。'),
           spatialTapFields(editSpatial, setEditSpatial, !writable),
+        ),
+        activeEditPanel === 'motion' && createElement('div', { key: 'edit-motion' },
+          createElement('div', { style: { fontSize: 11, color: '#888', marginBottom: 4 } },
+            '按状态/互动部位配置模型动作组；未配置项沿用默认。'),
+          motionMapFields(editMotionMap, setEditMotionMap, editMotionGroups, editMotionStatus, !writable, () => {
+            setActiveEditPanel(null)
+            requestAnimationFrame(() => setActiveEditPanel('motion'))
+          }),
         ),
       )
     }
@@ -736,7 +1205,9 @@ export function PetSettingsSection(props: PetSettingsProps): ReactNode {
       `custom-${c.id}`,
       value.model === c.id,
       () => enqueueWrite(() => [{ op: 'set', path: ['model'], value: c.id }]),
-      hasOverride ? `${c.name} · 分区已覆盖` : c.name,
+      [hasOverride ? '分区已覆盖' : null, hasMotionMap ? '动画已映射' : null].filter(Boolean).length > 0
+        ? `${c.name} · ${[hasOverride ? '分区已覆盖' : null, hasMotionMap ? '动画已映射' : null].filter(Boolean).join(' · ')}`
+        : c.name,
       !writable,
       createElement('span', { key: 'actions' },
         createElement('button', { style: buttonStyle, onClick: () => beginEdit(c) }, '修改'),
@@ -820,7 +1291,10 @@ export function PetSettingsSection(props: PetSettingsProps): ReactNode {
     ...customPersonaList.map((p) => ({ id: p.id, name: p.name ?? p.id })),
   ]
   children.push(createElement('div', { key: 'persona' },
-    createElement('div', { style: sectionTitleStyle }, '人设台词'),
+    createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', margin: '16px 0 8px' } },
+      createElement('div', { style: { fontSize: 13, fontWeight: 600, color: '#888' } }, '人设台词'),
+      headerLink('自定义人设 ↗', openPersonasFile),
+    ),
     createElement('div', { style: rowStyle },
       createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: personaNotice || personaState?.personasError ? 6 : 0 } },
         createElement(ThemeSelect, {
@@ -832,7 +1306,6 @@ export function PetSettingsSection(props: PetSettingsProps): ReactNode {
           },
         }),
         createElement('button', { style: buttonStyle, onClick: reloadPersonas }, '↻ 重新读取'),
-        createElement('button', { style: buttonStyle, onClick: openPersonasFile }, '自定义人设 ↗'),
       ),
       (personaState?.personasError || personaNotice) && createElement('div', {
         key: 'persona-notice',
@@ -863,11 +1336,39 @@ export function PetSettingsSection(props: PetSettingsProps): ReactNode {
 
   // 5. 模型列表（自绘 radio，与帧率档共用 ThemeRadioDot）
   children.push(createElement('div', { key: 'models' },
-    createElement('div', { style: sectionTitleStyle }, '内置模型（只读）'),
+    createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', margin: '16px 0 8px' } },
+      createElement('div', { style: { fontSize: 13, fontWeight: 600, color: '#888' } }, '内置模型（只读）'),
+      !!value.developerMode && headerLink('打开配置文件 ↗', openBuiltinPresetsFile),
+    ),
+    (builtinFileNotice || showBuiltinFilePopover) && createElement('div', {
+      key: 'builtin-file-notice',
+      style: { marginBottom: 6, color: '#b45309', fontSize: 12 },
+    },
+      builtinFileNotice,
+      showBuiltinFilePopover && createElement('div', { style: { marginTop: 4, wordBreak: 'break-all' } },
+        '无法直接打开，文件路径：',
+        createElement('div', { style: { color: '#666' } }, presetsPath),
+        createElement('button', { style: { ...buttonStyle, marginLeft: 0, marginTop: 4 }, onClick: () => setShowBuiltinFilePopover(false) }, '收起'),
+      ),
+    ),
     createElement('div', { role: 'radiogroup', 'aria-label': '内置模型' },
       builtinRows.length > 0 ? builtinRows : createElement('div', { style: { color: '#888', fontSize: 12 } }, '清单加载中…'),
     ),
-    createElement('div', { style: sectionTitleStyle }, '我的模型'),
+    createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', margin: '16px 0 8px' } },
+      createElement('div', { style: { fontSize: 13, fontWeight: 600, color: '#888' } }, '我的模型'),
+      headerLink('打开配置文件 ↗', openCustomModelsFile),
+    ),
+    (customFileNotice || showCustomFilePopover) && createElement('div', {
+      key: 'custom-file-notice',
+      style: { marginBottom: 6, color: '#b45309', fontSize: 12 },
+    },
+      customFileNotice,
+      showCustomFilePopover && createElement('div', { style: { marginTop: 4, wordBreak: 'break-all' } },
+        '无法直接打开，文件路径：',
+        createElement('div', { style: { color: '#666' } }, customModelsPath),
+        createElement('button', { style: { ...buttonStyle, marginLeft: 0, marginTop: 4 }, onClick: () => setShowCustomFilePopover(false) }, '收起'),
+      ),
+    ),
     createElement('div', { role: 'radiogroup', 'aria-label': '我的模型' },
       customRows.length > 0 ? customRows : createElement('div', { style: { color: '#888', fontSize: 12, marginBottom: 8 } }, '尚未添加自定义模型'),
     ),
@@ -889,24 +1390,49 @@ export function PetSettingsSection(props: PetSettingsProps): ReactNode {
         }),
         createElement('button', { style: buttonStyle, onClick: addModel, disabled: !writable }, '添加'),
       ),
-      createElement('button', {
-        type: 'button',
-        style: { ...buttonStyle, marginLeft: 0, alignSelf: 'flex-start' },
-        disabled: !writable,
-        onClick: () => setShowNewSpatial((v) => !v),
-      }, showNewSpatial ? '收起空间分区覆盖' : '空间分区覆盖（可选）'),
-      showNewSpatial && createElement('div', { key: 'new-spatial' },
+      createElement('div', { key: 'new-panel-tabs', style: { display: 'flex', gap: 4 } },
+        createElement('button', {
+          type: 'button',
+          style: activeNewPanel === 'spatial' ? panelTabActiveStyle : panelTabStyle,
+          disabled: !writable,
+          onClick: () => setActiveNewPanel((v) => v === 'spatial' ? null : 'spatial'),
+        }, '空间分区覆盖'),
+        createElement('button', {
+          type: 'button',
+          style: activeNewPanel === 'motion' ? panelTabActiveStyle : panelTabStyle,
+          disabled: !writable,
+          onClick: () => setActiveNewPanel((v) => v === 'motion' ? null : 'motion'),
+        }, '动画映射'),
+      ),
+      activeNewPanel === 'spatial' && createElement('div', { key: 'new-spatial' },
         createElement('div', { style: { fontSize: 11, color: '#888', marginBottom: 4 } },
           '相对包围盒 0–1；留空=该字段用全局默认。适合大帽子/全身比例与默认差较多的模型。'),
         spatialTapFields(newSpatial, setNewSpatial, !writable),
       ),
+      activeNewPanel === 'motion' && createElement('div', { key: 'new-motion' },
+        createElement('div', { style: { fontSize: 11, color: '#888', marginBottom: 4 } },
+          '按状态/互动部位配置模型动作组；未配置项沿用默认。'),
+        motionMapFields(newMotionMap, setNewMotionMap, newMotionGroups, newMotionStatus, !writable, () => {
+          setActiveNewPanel(null)
+          requestAnimationFrame(() => setActiveNewPanel('motion'))
+        }),
+      ),
     ),
   ))
 
-  // 6. 开发者选项：调试面板 + 点击分区叠加
+  // 6. 开发者选项：组标题 + 右侧 switch；开启后显示调试面板 / 点击分区
   children.push(createElement('div', { key: 'devtools' },
-    createElement('div', { style: sectionTitleStyle }, '开发者选项'),
-    createElement('div', { style: rowStyle },
+    createElement('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', margin: '16px 0 8px' } },
+      createElement('div', { style: { fontSize: 13, fontWeight: 600, color: '#888' } }, '开发者选项'),
+      createElement(ThemeSwitch, {
+        checked: !!value.developerMode,
+        disabled: !writable,
+        onChange: (next) => {
+          enqueueWrite(() => [{ op: 'set', path: ['developerMode'], value: next }])
+        },
+      }),
+    ),
+    !!value.developerMode && createElement('div', { style: rowStyle },
       createElement('label', { style: labelStyle },
         createElement('input', {
           type: 'checkbox',
@@ -917,7 +1443,7 @@ export function PetSettingsSection(props: PetSettingsProps): ReactNode {
             enqueueWrite(() => [{ op: 'set', path: ['debug'], value: next }])
           },
         }),
-        createElement('span', null, '调试模式（显示调试面板）'),
+        createElement('span', null, '调试面板'),
       ),
       createElement('label', { style: { ...labelStyle, marginTop: 8 } },
         createElement('input', {

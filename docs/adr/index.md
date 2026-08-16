@@ -14,3 +14,4 @@
 | [006](006-push-state-sse.md) | Host→Client 状态传输：SSE 推送替代轮询（supersede ADR-004 通信条款） | Accepted |
 | [007](007-personas-plugin-owned-jsonc-file.md) | 自定义人设走插件独有 JSONC 文件（不进 DSH settings 体系） | Accepted |
 | [008](008-motion-priority-and-focus-suppression.md) | Live2D 动作优先级与 focus 抑制规则 | Accepted |
+| [009](009-custom-model-animation-mapping.md) | 自定义模型动画映射与 debug 动画预览 | Accepted |
