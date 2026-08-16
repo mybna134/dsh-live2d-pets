@@ -50,6 +50,12 @@ dsh web
 
 Open the browser — a default pet (160px) appears at the bottom-right. Default model is Hiyori (Live2D sample); first load needs network.
 
+### Interaction
+
+- **Mouse follow** (enabled by default): as the pointer moves anywhere on the page, the pet’s head, eyes and body smoothly look toward it; when the pointer leaves the page it resets to face front. It pauses while dragging, hidden, or when the tab/window is not focused.
+- **Tap interactions**: touching the head / legs / arms / body triggers its own line and motion; when a model has sparse HitAreas, spatial fallback zones are used.
+- **Drag**: hold and drag the pet anywhere, then release to dock it; the position is persisted.
+
 Custom models: Settings → “Pet config” → “My models”, add a name + `.model3.json` URL (CDN, self-hosted static, or local HTTP). For odd proportions, expand **Spatial tap override (optional)** and tune the five rectangles (0–1; leave blank for defaults). Pair with developer option **Show tap zones**. Built-in Hiyori ships with a centered preset.
 
 ### Configuration
