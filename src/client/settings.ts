@@ -163,6 +163,7 @@ const MODELS_API = '/api/live2d-pet/models'
 const CUSTOM_MODELS_API = '/api/live2d-pet/custom-models'
 const STATE_API = '/api/live2d-pet/state'
 const RELOAD_PERSONAS_API = '/api/live2d-pet/reload-personas'
+const SELECT_LOCAL_MODEL_API = '/api/live2d-pet/select-local-model'
 
 const rowStyle: CSSProperties = {
   padding: '10px 12px',
@@ -856,6 +857,23 @@ async function copyText(text: string): Promise<boolean> {
   }
 }
 
+/** 「选择本地文件」：请求 Host 打开原生目录选择器并解析出入库 .model3.json 路径。
+ *  返回字符串为选中文件的绝对路径；取消/不可用/解析失败返回 null。 */
+async function selectLocalModelFile(): Promise<string | null> {
+  try {
+    const response = await fetch(SELECT_LOCAL_MODEL_API, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    })
+    if (!response.ok) return null
+    const data = await response.json() as { ok?: boolean; path?: string | null }
+    return typeof data.path === 'string' ? data.path : null
+  } catch {
+    return null
+  }
+}
+
 export function PetSettingsSection(props: PetSettingsProps): ReactNode {
   const [state, setState] = useState<SettingsState>({ status: 'loading', writable: false })
   // 最新视图 ref：写入 ops 在出队时按最新状态合成，避免快速操作读到过期闭包
@@ -958,6 +976,7 @@ export function PetSettingsSection(props: PetSettingsProps): ReactNode {
   }
 
   // 自定义模型表单（添加 + 编辑）
+  const [newFormNotice, setNewFormNotice] = useState<string | null>(null)
   const [newName, setNewName] = useState('')
   const [newUrl, setNewUrl] = useState('')
   const [newSpatial, setNewSpatial] = useState<SpatialTapDraft>(EMPTY_SPATIAL_DRAFT)
@@ -1044,13 +1063,21 @@ export function PetSettingsSection(props: PetSettingsProps): ReactNode {
   const addModel = () => {
     const name = newName.trim()
     const url = newUrl.trim()
-    if (!name || !isSupportedModelLocation(url)) return
+    if (!name) {
+      setNewFormNotice('请填写模型名称')
+      return
+    }
+    if (!isSupportedModelLocation(url)) {
+      setNewFormNotice('模型地址无效：仅支持 http(s) URL 或本地绝对路径（/…、~/…、C:/…）')
+      return
+    }
     const spatialTap = overrideFromDraft(newSpatial)
     const animationMap = motionMapFromDraft(newMotionMap)
     const entry: CustomModelEntry = { id: `m${Date.now()}`, name, modelUrl: url }
     if (spatialTap) entry.spatialTap = spatialTap
     if (animationMap) entry.animationMap = animationMap
     enqueueCustomWrite((current) => [...current, entry])
+    setNewFormNotice(null)
     setNewName('')
     setNewUrl('')
     setNewSpatial(EMPTY_SPATIAL_DRAFT)
@@ -1114,7 +1141,11 @@ export function PetSettingsSection(props: PetSettingsProps): ReactNode {
 
   const reloadPersonas = () => {
     setPersonaNotice('读取中…')
-    fetch(RELOAD_PERSONAS_API, { method: 'POST' })
+    fetch(RELOAD_PERSONAS_API, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    })
       .then((r) => (r.ok ? r.json() : null))
       .then((data: { error?: string | null } | null) => {
         reloadPersonaState()
@@ -1169,9 +1200,16 @@ export function PetSettingsSection(props: PetSettingsProps): ReactNode {
           createElement('input', {
             style: { ...inputStyle, flex: 1, minWidth: 120 },
             value: editUrl,
-            placeholder: 'https://…/model3.json 或 C:/models/...',
+            placeholder: 'https://…/model3.json 或本地绝对路径（如 /home/…）',
             onChange: (e: ChangeEvent<HTMLInputElement>) => setEditUrl(e.target.value),
           }),
+          createElement('button', {
+            type: 'button',
+            style: buttonStyle,
+            onClick: () => {
+              void selectLocalModelFile().then((path) => { if (path) setEditUrl(path) })
+            },
+          }, '选择本地文件'),
           createElement('button', { style: buttonStyle, onClick: () => saveEdit(c.id) }, '保存'),
           createElement('button', { style: buttonStyle, onClick: () => { setEditId(null); setActiveEditPanel(null) } }, '取消'),
         ),
@@ -1385,12 +1423,24 @@ export function PetSettingsSection(props: PetSettingsProps): ReactNode {
         createElement('input', {
           style: { ...inputStyle, flex: 1, minWidth: 140 },
           value: newUrl,
-          placeholder: 'https://…/xxx.model3.json 或 C:/models/...',
+          placeholder: 'https://…/xxx.model3.json 或本地绝对路径（如 /home/…、C:/models/...）',
           disabled: !writable,
           onChange: (e: ChangeEvent<HTMLInputElement>) => setNewUrl(e.target.value),
         }),
+        createElement('button', {
+          type: 'button',
+          style: buttonStyle,
+          disabled: !writable,
+          onClick: () => {
+            void selectLocalModelFile().then((path) => { if (path) setNewUrl(path) })
+          },
+        }, '选择本地文件'),
         createElement('button', { style: buttonStyle, onClick: addModel, disabled: !writable }, '添加'),
       ),
+      newFormNotice && createElement('div', {
+        key: 'new-form-notice',
+        style: { color: '#b45309', fontSize: 12 },
+      }, newFormNotice),
       createElement('div', { key: 'new-panel-tabs', style: { display: 'flex', gap: 4 } },
         createElement('button', {
           type: 'button',

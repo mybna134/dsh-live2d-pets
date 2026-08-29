@@ -43,7 +43,7 @@ function fakeRes() {
 
 const BASE_CONFIG: Config = { enabled: true, size: 160, maxFps: 30, model: 'hiyori', developerMode: false, debug: false, showTapZones: false, customModels: [], persona: 'tsundere' }
 
-function makeRoutes() {
+function makeRoutes(opts?: { picker?: { pick: (signal?: AbortSignal) => Promise<string | null> } }) {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-live2d-pets-route-'))
   mkdirSync(join(dir, 'assets', 'vendor'), { recursive: true })
   writeFileSync(join(dir, 'assets', 'vendor', 'pixi.min.js'), 'fake-pixi-js')
@@ -69,7 +69,13 @@ function makeRoutes() {
     write: vi.fn(async () => {}),
   }
   const openStreams: Array<() => void> = []
-  const routes = makePetRoutes({ service, packageRoot: dir, settings, onStream: (close) => { openStreams.push(close) } })
+  const routes = makePetRoutes({
+    service,
+    packageRoot: dir,
+    settings,
+    picker: opts?.picker,
+    onStream: (close) => { openStreams.push(close) },
+  })
   const route = (path: string) => routes.find((r) => r.path === path)
   const cleanup = () => { delete process.env.DSH_HOME; rmSync(dir, { recursive: true, force: true }) }
   return { route, settings, service, emit, openStreams, cleanup }
@@ -151,6 +157,44 @@ describe('makePetRoutes API 路由', () => {
     expect(res.state.status).toBe(400)
     const body = JSON.parse(res.state.body.toString('utf8'))
     expect(body.error).toBe('body-too-large')
+    cleanup()
+  })
+
+  it('POST /select-local-model 无 picker 时返回 picker-unavailable', async () => {
+    const { route, cleanup } = makeRoutes()
+    const res = fakeRes()
+    await route(`${PET_API_PREFIX}/select-local-model`)!.handler(fakeReq('POST'), res as never)
+    expect(res.state.status).toBe(200)
+    const body = JSON.parse(res.state.body.toString('utf8'))
+    expect(body.ok).toBe(false)
+    expect(body.error).toBe('picker-unavailable')
+    cleanup()
+  })
+
+  it('POST /select-local-model 选择含 .model3.json 的目录回填入口文件路径', async () => {
+    const modelDir = mkdtempSync(join(tmpdir(), 'dsh-l2d-route-pick-'))
+    writeFileSync(join(modelDir, 'foo.model3.json'), '{}', 'utf8')
+    const { route, cleanup } = makeRoutes({
+      picker: { pick: async () => modelDir },
+    })
+    const res = fakeRes()
+    await route(`${PET_API_PREFIX}/select-local-model`)!.handler(fakeReq('POST'), res as never)
+    expect(res.state.status).toBe(200)
+    const body = JSON.parse(res.state.body.toString('utf8'))
+    expect(body.ok).toBe(true)
+    expect(body.path).toBe(join(modelDir, 'foo.model3.json'))
+    rmSync(modelDir, { recursive: true, force: true })
+    cleanup()
+  })
+
+  it('POST /select-local-model 选择器取消返回 cancelled', async () => {
+    const { route, cleanup } = makeRoutes({ picker: { pick: async () => null } })
+    const res = fakeRes()
+    await route(`${PET_API_PREFIX}/select-local-model`)!.handler(fakeReq('POST'), res as never)
+    const body = JSON.parse(res.state.body.toString('utf8'))
+    expect(body.ok).toBe(true)
+    expect(body.cancelled).toBe(true)
+    expect(body.path).toBeNull()
     cleanup()
   })
 })

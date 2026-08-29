@@ -31,6 +31,16 @@ README 声称支持“本机可达的本地模型地址”，但浏览器不能�
   - 读取文件并返回给浏览器；
 - `resolveModelUrl()` 对本地路径返回上述虚拟 URL，客户端照常通过同源 HTTP 加载。
 
+### 「选择本地文件」按钮（v0.2.3）
+
+设置页 URL 框右侧新增「选择本地文件」按钮，回填本地模型的**文件绝对路径**：
+
+- DSH 只暴露原生**目录**选择器（`ctx.directoryPicker` 的 `native` 能力，无原生「文件」选择器），故采用「选目录 → 自动定位入口文件」等价实现：
+  - 新增 Host 端点 `POST /api/live2d-pet/select-local-model`：调用 `picker.pick()` 打开目录选择器 → `resolveLocalEntryFile()` 解析目录内第一个 `.model3.json`（若目标本就是文件路径则原样返回）→ 回填绝对路径；
+  - picker 仅在 `ctx.directoryPicker.capability().kind === 'native'` 时注入，能力缺失/非 native 时端点返回 `picker-unavailable`，按钮点击无副作用；
+- 回填的是 `.model3.json` **文件**绝对路径（满足“选文件”预期），仍走既有 `/pet-local-models/...` 路由加载；
+- 用户仍可手填本地绝对路径，并支持 Unix 家目录简写 `~/...`（`localModelTarget`/`resolveLocalEntryFile` 先行展开）。
+
 ## Alternatives Considered
 
 ### 备选方案 A：junction 链接到静态资源目录

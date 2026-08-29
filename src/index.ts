@@ -11,7 +11,7 @@ import { settingsNamespace, type SettingsPathOp } from '@deepseek-ai/dsh-setting
 import Schema from '@deepseek-ai/schemastery'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import { PetService } from './service.ts'
-import { makePetRoutes, petPackageRoot, type SettingsRoutesApi } from './routes.ts'
+import { makePetRoutes, petPackageRoot, type SettingsRoutesApi, type LocalModelPicker } from './routes.ts'
 import type { CustomModelEntry } from './models.ts'
 import { listBuiltinPresets, resolveModelUrl, resolveSpatialTap, resolveMotionMap } from './models-host.ts'
 import { PersonasStore } from './personas.ts'
@@ -122,6 +122,17 @@ export function apply(ctx: Context, config: Config): void {
     }),
   }
 
+  // 「选择本地文件」：DSH 只有原生「目录」选择器（ctx.directoryPicker 的 native
+  // 能力，见 dsh-host-directory-picker）。选目录后由插件解析出其入口 .model3.json
+  // 文件回填 URL 框。服务缺失 / 能力非 native 时 picker 为 undefined，端点返回不可用。
+  const directoryPicker = (ctx as { directoryPicker?: unknown }).directoryPicker as
+    | { capability?: () => { kind?: string; pick?: (signal?: AbortSignal) => Promise<string | null> } }
+    | undefined
+  const picker: LocalModelPicker | undefined = directoryPicker?.capability?.()?.kind === 'native'
+    && directoryPicker.capability!().pick
+    ? { pick: (signal?: AbortSignal) => directoryPicker.capability!().pick!(signal) }
+    : undefined
+
   // 路由随插件生命周期注册/清理；配置变更（HMR / settings 热更新）经 resolveConfig 即时反映。
   // 插件卸载时同时关闭全部活跃 SSE 流（onStream），避免旧流在路由注销后空转心跳。
   ctx.effect(() => {
@@ -130,6 +141,7 @@ export function apply(ctx: Context, config: Config): void {
       service,
       packageRoot: petPackageRoot(import.meta.url),
       settings: settingsApi,
+      picker,
       onStream: (close) => { openStreams.add(close) },
     })
     const disposers = routes.map((route) => ctx.webServer.register(route))
