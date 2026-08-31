@@ -43,7 +43,7 @@ function fakeRes() {
 
 const BASE_CONFIG: Config = { enabled: true, size: 160, maxFps: 30, model: 'hiyori', developerMode: false, debug: false, showTapZones: false, customModels: [], persona: 'tsundere' }
 
-function makeRoutes(opts?: { picker?: { pick: (signal?: AbortSignal) => Promise<string | null> } }) {
+function makeRoutes() {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-live2d-pets-route-'))
   mkdirSync(join(dir, 'assets', 'vendor'), { recursive: true })
   writeFileSync(join(dir, 'assets', 'vendor', 'pixi.min.js'), 'fake-pixi-js')
@@ -73,7 +73,6 @@ function makeRoutes(opts?: { picker?: { pick: (signal?: AbortSignal) => Promise<
     service,
     packageRoot: dir,
     settings,
-    picker: opts?.picker,
     onStream: (close) => { openStreams.push(close) },
   })
   const route = (path: string) => routes.find((r) => r.path === path)
@@ -160,41 +159,59 @@ describe('makePetRoutes API 路由', () => {
     cleanup()
   })
 
-  it('POST /select-local-model 无 picker 时返回 picker-unavailable', async () => {
+  it('POST /list-local-dir 列出指定目录下的子目录与 .model3.json', async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), 'dsh-l2d-route-list-'))
+    const sub = join(homeDir, 'subdir')
+    mkdirSync(sub)
+    writeFileSync(join(homeDir, 'foo.model3.json'), '{}', 'utf8')
+    writeFileSync(join(homeDir, 'ignore.txt'), 'x', 'utf8')
     const { route, cleanup } = makeRoutes()
     const res = fakeRes()
-    await route(`${PET_API_PREFIX}/select-local-model`)!.handler(fakeReq('POST'), res as never)
-    expect(res.state.status).toBe(200)
-    const body = JSON.parse(res.state.body.toString('utf8'))
-    expect(body.ok).toBe(false)
-    expect(body.error).toBe('picker-unavailable')
-    cleanup()
-  })
-
-  it('POST /select-local-model 选择含 .model3.json 的目录回填入口文件路径', async () => {
-    const modelDir = mkdtempSync(join(tmpdir(), 'dsh-l2d-route-pick-'))
-    writeFileSync(join(modelDir, 'foo.model3.json'), '{}', 'utf8')
-    const { route, cleanup } = makeRoutes({
-      picker: { pick: async () => modelDir },
-    })
-    const res = fakeRes()
-    await route(`${PET_API_PREFIX}/select-local-model`)!.handler(fakeReq('POST'), res as never)
+    await route(`${PET_API_PREFIX}/list-local-dir`)!.handler(
+      fakeReq('POST', JSON.stringify({ path: homeDir })),
+      res as never,
+    )
     expect(res.state.status).toBe(200)
     const body = JSON.parse(res.state.body.toString('utf8'))
     expect(body.ok).toBe(true)
-    expect(body.path).toBe(join(modelDir, 'foo.model3.json'))
+    const files = body.listing.files.map((f: { name: string }) => f.name)
+    const dirs = body.listing.dirs.map((d: { name: string }) => d.name)
+    expect(files).toContain('foo.model3.json')
+    expect(dirs).toContain('subdir')
+    expect(files).not.toContain('ignore.txt')
+    rmSync(homeDir, { recursive: true, force: true })
+    cleanup()
+  })
+
+  it('POST /list-local-dir 指定含 .model3.json 的目录返回其文件列表', async () => {
+    const modelDir = mkdtempSync(join(tmpdir(), 'dsh-l2d-route-list2-'))
+    writeFileSync(join(modelDir, 'foo.model3.json'), '{}', 'utf8')
+    const { route, cleanup } = makeRoutes()
+    const res = fakeRes()
+    await route(`${PET_API_PREFIX}/list-local-dir`)!.handler(
+      fakeReq('POST', JSON.stringify({ path: modelDir })),
+      res as never,
+    )
+    expect(res.state.status).toBe(200)
+    const body = JSON.parse(res.state.body.toString('utf8'))
+    expect(body.ok).toBe(true)
+    expect(body.listing.path).toBe(modelDir)
+    expect(body.listing.files.map((f: { path: string }) => f.path)).toContain(join(modelDir, 'foo.model3.json'))
     rmSync(modelDir, { recursive: true, force: true })
     cleanup()
   })
 
-  it('POST /select-local-model 选择器取消返回 cancelled', async () => {
-    const { route, cleanup } = makeRoutes({ picker: { pick: async () => null } })
+  it('POST /list-local-dir 目标不可读时返回 directory-unreadable', async () => {
+    const { route, cleanup } = makeRoutes()
     const res = fakeRes()
-    await route(`${PET_API_PREFIX}/select-local-model`)!.handler(fakeReq('POST'), res as never)
+    await route(`${PET_API_PREFIX}/list-local-dir`)!.handler(
+      fakeReq('POST', JSON.stringify({ path: '/nonexistent-dir-xyz' })),
+      res as never,
+    )
+    expect(res.state.status).toBe(200)
     const body = JSON.parse(res.state.body.toString('utf8'))
-    expect(body.ok).toBe(true)
-    expect(body.cancelled).toBe(true)
-    expect(body.path).toBeNull()
+    expect(body.ok).toBe(false)
+    expect(body.error).toBe('directory-unreadable')
     cleanup()
   })
 })

@@ -8,6 +8,7 @@ import {
   resolveLocalModelFile,
   resolveLocalEntryFile,
   expandLocalPath,
+  listLocalDir,
 } from './local-models.ts'
 import { isLocalModelPath, isSupportedModelLocation } from './models.ts'
 
@@ -103,5 +104,28 @@ describe('local model path helpers', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
+  })
+
+  it('listLocalDir 列出子目录与 .model3.json 文件，跳过其它文件与损坏条目', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-l2d-local-list-'))
+    try {
+      const sub = join(dir, 'sub')
+      mkdirSync(sub)
+      writeFileSync(join(dir, 'a.model3.json'), '{}', 'utf8')
+      writeFileSync(join(dir, 'b.model3.json'), '{}', 'utf8')
+      writeFileSync(join(dir, 'note.txt'), 'x', 'utf8')
+      const listing = listLocalDir(dir)
+      expect(listing).not.toBeNull()
+      expect(listing!.path).toBe(dir)
+      expect(listing!.files.map((f) => f.name).sort()).toEqual(['a.model3.json', 'b.model3.json'])
+      expect(listing!.dirs.map((d) => d.name)).toEqual(['sub'])
+      expect(listing!.parent).toBe(resolve(dir, '..'))
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('listLocalDir 目标不存在或非目录返回 null', () => {
+    expect(listLocalDir('/no/such/dir-xyz')).toBeNull()
   })
 })

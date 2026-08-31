@@ -14,16 +14,8 @@ import type { PetService } from './service.ts'
 import { listBuiltinPresets } from './models-host.ts'
 import type { CustomModelEntry } from './models.ts'
 import { isLocalModelPath } from './models.ts'
-import { resolveLocalModelFile, resolveLocalEntryFile } from './local-models.ts'
+import { resolveLocalModelFile, listLocalDir } from './local-models.ts'
 import type { SettingsPathOp } from '@deepseek-ai/dsh-settings'
-
-/** 原生目录选择器（Host `ctx.directoryPicker` 的 native 能力）。
- *  DSH 无原生「文件」选择器，只有目录选择器；选择目录后由插件解析出
- *  入口 `.model3.json` 文件，从而在 URL 框回填真正的文件绝对路径。 */
-export interface LocalModelPicker {
-  /** 打开一次原生目录选择器；取消返回 null。 */
-  pick(signal?: AbortSignal): Promise<string | null>
-}
 
 /** 设置读写 API（Host 直连 ctx.settings；不走 wire 白名单，见 research/settings-tab.md）。 */
 export interface SettingsRoutesApi {
@@ -223,12 +215,10 @@ export function makePetRoutes(deps: {
   service: PetService
   packageRoot: string
   settings: SettingsRoutesApi
-  /** 原生目录选择器（可选）：「选择本地文件」按钮依赖，缺省时该端点返回不可用。 */
-  picker?: LocalModelPicker
   /** SSE 活跃流注册钩子：插件卸载时由调用方逐一 close（ADR-006）。 */
   onStream?: (close: () => void) => void
 }): WebRoute[] {
-  const { service, packageRoot, settings, picker, onStream } = deps
+  const { service, packageRoot, settings, onStream } = deps
   const apiRoutes: WebRoute[] = [
     sseStateRoute(`${PET_API_PREFIX}/events`, service, onStream),
     getRoute(`${PET_API_PREFIX}/state`, async () => service.snapshot()),
@@ -238,15 +228,14 @@ export function makePetRoutes(deps: {
       presetsPath: join(packageRoot, 'src', 'presets', 'presets.jsonc'),
       customModelsPath: service.customModelsFile().path,
     })),
-    // 「选择本地文件」：原生目录选择器选一个目录 → 解析出其入口 .model3.json
-    // 文件绝对路径 → 回填设置页 URL 框（DSH 无原生文件选择器，见 localModelPicker）
-    postRoute(`${PET_API_PREFIX}/select-local-model`, async () => {
-      if (!picker) return { ok: false, error: 'picker-unavailable', path: null }
-      const dir = await picker.pick()
-      if (dir == null) return { ok: true, cancelled: true, path: null }
-      const file = resolveLocalEntryFile(dir)
-      if (!file) return { ok: false, error: 'no-model3-json', path: null }
-      return { ok: true, cancelled: false, path: file }
+    // 「选择本地文件」：不依赖 DSH 的 directoryPicker 服务，插件自研浏览——
+    // Host 侧直接用 Node fs 列出目录，客户端逐级导航并选中 `.model3.json` 文件，
+    // 回填其绝对路径到设置页 URL 框（见 settings.ts 目录浏览弹层）。
+    postRoute(`${PET_API_PREFIX}/list-local-dir`, (body) => {
+      const target = typeof body.path === 'string' ? body.path : null
+      const listing = listLocalDir(target)
+      if (!listing) return Promise.resolve({ ok: false, error: 'directory-unreadable', listing: null })
+      return Promise.resolve({ ok: true, listing })
     }),
     getPostRoute(
       `${PET_API_PREFIX}/custom-models`,

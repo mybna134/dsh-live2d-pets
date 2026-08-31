@@ -163,7 +163,7 @@ const MODELS_API = '/api/live2d-pet/models'
 const CUSTOM_MODELS_API = '/api/live2d-pet/custom-models'
 const STATE_API = '/api/live2d-pet/state'
 const RELOAD_PERSONAS_API = '/api/live2d-pet/reload-personas'
-const SELECT_LOCAL_MODEL_API = '/api/live2d-pet/select-local-model'
+const LIST_LOCAL_DIR_API = '/api/live2d-pet/list-local-dir'
 
 const rowStyle: CSSProperties = {
   padding: '10px 12px',
@@ -857,21 +857,130 @@ async function copyText(text: string): Promise<boolean> {
   }
 }
 
-/** 「选择本地文件」：请求 Host 打开原生目录选择器并解析出入库 .model3.json 路径。
- *  返回字符串为选中文件的绝对路径；取消/不可用/解析失败返回 null。 */
-async function selectLocalModelFile(): Promise<string | null> {
+/** 本地目录浏览的一行（子目录 / `.model3.json` 文件）。 */
+interface LocalListingEntry {
+  name: string
+  path: string
+}
+
+/** Host 返回的本地目录列表。 */
+interface LocalListing {
+  path: string
+  home: string
+  parent: string | null
+  files: LocalListingEntry[]
+  dirs: LocalListingEntry[]
+}
+
+/** 读取某个本地目录（不依赖 DSH directoryPicker，插件自研浏览）。 */
+async function listLocalDir(path: string | null): Promise<LocalListing | null> {
   try {
-    const response = await fetch(SELECT_LOCAL_MODEL_API, {
+    const response = await fetch(LIST_LOCAL_DIR_API, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: '{}',
+      body: JSON.stringify({ path }),
     })
     if (!response.ok) return null
-    const data = await response.json() as { ok?: boolean; path?: string | null }
-    return typeof data.path === 'string' ? data.path : null
+    const data = await response.json() as { ok?: boolean; listing?: LocalListing | null }
+    return data.listing ?? null
   } catch {
     return null
   }
+}
+
+/** 「选择本地文件」弹层：插件自研的目录浏览（不依赖 DSH directoryPicker 服务）。
+ *  逐级点击子目录进入，点击 `.model3.json` 文件即回填其绝对路径。 */
+function LocalFileBrowser(props: { onPick: (path: string) => void; onClose: () => void }): ReactNode {
+  const { onPick, onClose } = props
+  const [path, setPath] = useState<string | null>(null)
+  const [listing, setListing] = useState<LocalListing | null>(null)
+  const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
+  const [error, setError] = useState<string | null>(null)
+
+  const openDir = useCallback((target: string | null) => {
+    setStatus('loading')
+    setError(null)
+    void listLocalDir(target).then((l) => {
+      if (l) {
+        setListing(l)
+        setPath(l.path)
+        setStatus('ready')
+      } else {
+        setStatus('error')
+        setError(target ? `无法读取目录：${target}` : '无法读取家目录')
+      }
+    })
+  }, [])
+
+  useEffect(() => { openDir(null) }, [openDir])
+
+  const mkRow = (entry: LocalListingEntry, isDir: boolean): ReactElement => {
+    const label = isDir ? `▸ ${entry.name}/` : entry.name
+    return createElement('button', {
+      key: entry.path,
+      type: 'button',
+      onClick: () => { isDir ? openDir(entry.path) : onPick(entry.path) },
+      style: {
+        display: 'block',
+        width: '100%',
+        margin: 0,
+        padding: '5px 8px',
+        border: 'none',
+        borderRadius: 6,
+        textAlign: 'left',
+        cursor: 'pointer',
+        fontSize: 13,
+        color: '#e8e8ec',
+        background: 'transparent',
+        outline: 'none',
+        fontFamily: 'monospace',
+      },
+      onMouseEnter: (e: MouseEvent<HTMLButtonElement>) => { e.currentTarget.style.background = 'rgba(128,128,128,.22)' },
+      onMouseLeave: (e: MouseEvent<HTMLButtonElement>) => { e.currentTarget.style.background = 'transparent' },
+    }, label)
+  }
+
+  return createElement('div', {
+    style: {
+      marginTop: 8,
+      padding: '8px 10px',
+      borderRadius: 8,
+      border: '1px solid rgba(128,128,128,.35)',
+      background: '#2a2a2e',
+      fontSize: 12,
+    },
+  },
+    createElement('div', {
+      style: { display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6, flexWrap: 'wrap' },
+    },
+      createElement('button', {
+        type: 'button',
+        style: buttonStyle,
+        onClick: () => openDir(listing?.home ?? null),
+      }, '🏠 家目录'),
+      createElement('button', {
+        type: 'button',
+        style: buttonStyle,
+        disabled: !listing?.parent,
+        onClick: () => { if (listing?.parent) openDir(listing.parent) },
+      }, '⬆ 上级'),
+      createElement('span', {
+        style: { color: '#888', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', wordBreak: 'break-all' },
+      }, listing?.path ?? '…'),
+      createElement('button', { type: 'button', style: buttonStyle, onClick: onClose }, '取消'),
+    ),
+    status === 'loading' && createElement('div', { style: { color: '#888', padding: '6px 0' } }, '读取目录中…'),
+    status === 'error' && createElement('div', { style: { color: '#b45309', padding: '6px 0' } }, error ?? '目录不可用'),
+    status === 'ready' && createElement('div', {
+      style: { maxHeight: 240, overflowY: 'auto', borderTop: '1px solid rgba(128,128,128,.2)', paddingTop: 4 },
+    },
+      listing!.dirs.length === 0 && listing!.files.length === 0
+        ? createElement('div', { style: { color: '#888', padding: '6px 0' } }, '此目录下没有子目录或 .model3.json 文件')
+        : null,
+      listing!.dirs.map((d) => mkRow(d, true)),
+      listing!.files.map((f) => mkRow(f, false)),
+    ),
+  )
 }
 
 export function PetSettingsSection(props: PetSettingsProps): ReactNode {
@@ -976,6 +1085,7 @@ export function PetSettingsSection(props: PetSettingsProps): ReactNode {
   }
 
   // 自定义模型表单（添加 + 编辑）
+  const [browseTarget, setBrowseTarget] = useState<'new' | 'edit' | null>(null)
   const [newFormNotice, setNewFormNotice] = useState<string | null>(null)
   const [newName, setNewName] = useState('')
   const [newUrl, setNewUrl] = useState('')
@@ -1206,9 +1316,7 @@ export function PetSettingsSection(props: PetSettingsProps): ReactNode {
           createElement('button', {
             type: 'button',
             style: buttonStyle,
-            onClick: () => {
-              void selectLocalModelFile().then((path) => { if (path) setEditUrl(path) })
-            },
+            onClick: () => setBrowseTarget('edit'),
           }, '选择本地文件'),
           createElement('button', { style: buttonStyle, onClick: () => saveEdit(c.id) }, '保存'),
           createElement('button', { style: buttonStyle, onClick: () => { setEditId(null); setActiveEditPanel(null) } }, '取消'),
@@ -1431,9 +1539,7 @@ export function PetSettingsSection(props: PetSettingsProps): ReactNode {
           type: 'button',
           style: buttonStyle,
           disabled: !writable,
-          onClick: () => {
-            void selectLocalModelFile().then((path) => { if (path) setNewUrl(path) })
-          },
+          onClick: () => setBrowseTarget('new'),
         }, '选择本地文件'),
         createElement('button', { style: buttonStyle, onClick: addModel, disabled: !writable }, '添加'),
       ),
@@ -1510,6 +1616,19 @@ export function PetSettingsSection(props: PetSettingsProps): ReactNode {
       ),
     ),
   ))
+
+  // 「选择本地文件」弹层：选中后回填到对应的 URL 框（新增 / 编辑）
+  if (browseTarget) {
+    children.push(createElement(LocalFileBrowser, {
+      key: 'local-file-browser',
+      onPick: (p: string) => {
+        if (browseTarget === 'edit') setEditUrl(p)
+        else setNewUrl(p)
+        setBrowseTarget(null)
+      },
+      onClose: () => setBrowseTarget(null),
+    }))
+  }
 
   return createElement('div', { style: { padding: '16px 20px', maxWidth: 560 } }, children)
 }
